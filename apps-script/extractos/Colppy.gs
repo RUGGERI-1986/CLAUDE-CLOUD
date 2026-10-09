@@ -16,6 +16,7 @@
  *     "movimientos" con idPlanCuenta, fechaContable, DebitoCredito (D/C) e Importe.
  *   - Si el formato de fecha es otro, IGNORA el filtro sin dar error y devuelve todo: por eso se
  *     controla que cada movimiento esté dentro del rango pedido.
+ *   - Sin paginar devuelve solo 50 movimientos: se pide por páginas (start / limit).
  *   - Los movimientos con isNIIF = 1 (libro NIIF) se excluyen para no contarlos dos veces.
  * Control: el saldo calculado de cada banco se compara con el saldo de Tesorería/listado_banco.
  *
@@ -44,6 +45,8 @@ const COLPPY = {
   HOJA_BANCOS: 'Bancos Colppy',
   DIARIO_DESDE: '2001-01-01',    // inicio del historial: el saldo es la suma desde acá
   DIAS_FUTURO: 366,              // se piden también movimientos con fecha futura, para informarlos
+  LOTE: 500,                     // movimientos por página del libro diario
+  MAX_PAGINAS: 200,              // tope de páginas por corrida (100.000 movimientos)
   SESION_MS: 11 * 3600 * 1000    // la sesión dura 12 h desde el último uso; se renueva antes
 };
 const HEADERS_MAPEO_COLPPY = ['cuenta', 'moneda', 'código Colppy', 'descripción Colppy', 'notas'];
@@ -225,29 +228,57 @@ function colppyCuentaPorCodigo(codigo) {
 
 // Libro diario entre dos fechas (yyyy-MM-dd), de todas las cuentas. Se cachea por corrida.
 // Producción acepta fromDate / toDate en aaaa-mm-dd y devuelve la lista en "movimientos".
+// Sin paginar devuelve como máximo 50 movimientos: se pide por páginas con start / limit y se
+// controla que el paginado funcione (si Colppy lo ignora, repite movimientos y se frena).
 function colppyMovimientos(desdeStr, hastaStr) {
   const k = 'movs|' + desdeStr + '|' + hastaStr;
   if (_colppyCache[k]) return _colppyCache[k];
-  const r = colppyLlamar('Contabilidad', 'listar_movimientosdiario', { fromDate: desdeStr, toDate: hastaStr });
-  const crudos = Array.isArray(r.movimientos) ? r.movimientos : (Array.isArray(r.data) ? r.data : null);
-  if (!crudos) throw new Error('listar_movimientosdiario no devolvió la lista "movimientos" (claves: ' + Object.keys(r).join(', ') + ')');
   const lista = [];
-  let niif = 0;
-  crudos.forEach(m => {
-    if (String(m.isNIIF) === '1') { niif++; return; }
-    const fecha = colppyFecha(m.fechaContable);
-    const dc = String(m.DebitoCredito || '').trim().toUpperCase();
-    if (!fecha) throw new Error('movimiento sin fechaContable legible: ' + JSON.stringify(m).slice(0, 200));
-    if (dc !== 'D' && dc !== 'C') throw new Error('movimiento con DebitoCredito inesperado: ' + JSON.stringify(m).slice(0, 200));
-    // Si Colppy ignoró el filtro de fechas, el saldo saldría mal: se frena.
-    if (fecha < desdeStr || fecha > hastaStr) {
-      throw new Error(`Colppy devolvió un movimiento del ${fecha} fuera del rango pedido (${desdeStr} a ${hastaStr}): ignoró el filtro de fechas`);
+  const vistos = new Set();
+  let niif = 0, total = 0, paginas = 0, start = 0;
+  while (true) {
+    if (++paginas > COLPPY.MAX_PAGINAS) {
+      throw new Error(`el libro diario tiene más de ${COLPPY.MAX_PAGINAS * COLPPY.LOTE} movimientos: subí MAX_PAGINAS`);
     }
-    const importe = colppyNum(m.Importe);
-    lista.push({ cuenta: String(m.idPlanCuenta || '').trim(), fecha, importe: dc === 'D' ? importe : -importe });
-  });
+    const r = colppyLlamar('Contabilidad', 'listar_movimientosdiario',
+      { fromDate: desdeStr, toDate: hastaStr, start, limit: COLPPY.LOTE });
+    const crudos = Array.isArray(r.movimientos) ? r.movimientos : (Array.isArray(r.data) ? r.data : null);
+    if (!crudos) throw new Error('listar_movimientosdiario no devolvió la lista "movimientos" (claves: ' + Object.keys(r).join(', ') + ')');
+    let nuevos = 0;
+    crudos.forEach(m => {
+      const id = String(m.idDiario || '');
+      if (!id) throw new Error('movimiento sin idDiario: ' + JSON.stringify(m).slice(0, 200));
+      if (vistos.has(id)) return;
+      vistos.add(id);
+      nuevos++;
+      total++;
+      if (String(m.isNIIF) === '1') { niif++; return; }
+      const fecha = colppyFecha(m.fechaContable);
+      const dc = String(m.DebitoCredito || '').trim().toUpperCase();
+      if (!fecha) throw new Error('movimiento sin fechaContable legible: ' + JSON.stringify(m).slice(0, 200));
+      if (dc !== 'D' && dc !== 'C') throw new Error('movimiento con DebitoCredito inesperado: ' + JSON.stringify(m).slice(0, 200));
+      // Si Colppy ignoró el filtro de fechas, el saldo saldría mal: se frena.
+      if (fecha < desdeStr || fecha > hastaStr) {
+        throw new Error(`Colppy devolvió un movimiento del ${fecha} fuera del rango pedido (${desdeStr} a ${hastaStr}): ignoró el filtro de fechas`);
+      }
+      const importe = colppyNum(m.Importe);
+      lista.push({ cuenta: String(m.idPlanCuenta || '').trim(), fecha, importe: dc === 'D' ? importe : -importe });
+    });
+    if (crudos.length && !nuevos) {
+      throw new Error(`Colppy repitió los mismos movimientos en la página ${paginas}: no acepta el paginado start / limit`);
+    }
+    if (crudos.length < COLPPY.LOTE) {
+      // Página incompleta = última. Si vino justo el tope viejo de 50 con lote mayor, el limit se ignoró.
+      if (paginas === 1 && crudos.length === 50 && COLPPY.LOTE !== 50) {
+        throw new Error('Colppy devolvió exactamente 50 movimientos: ignoró el parámetro limit, el libro diario está incompleto');
+      }
+      break;
+    }
+    start += crudos.length;
+  }
   lista.niif = niif;
-  lista.total = crudos.length;
+  lista.total = total;
+  lista.paginas = paginas;
   _colppyCache[k] = lista;
   return lista;
 }
@@ -379,7 +410,7 @@ function probarColppy(fechaStr) {
 
   const diario = colppyDiarioCompleto();
   const fechas = diario.map(m => m.fecha).sort();
-  lineas.push(`Libro diario: ${diario.total} movimiento(s) leídos` +
+  lineas.push(`Libro diario: ${diario.total} movimiento(s) leídos en ${diario.paginas} página(s)` +
               (diario.niif ? `, ${diario.niif} NIIF excluidos` : '') +
               (fechas.length ? ` · del ${fmtCorto(fechas[0])} al ${fmtCorto(fechas[fechas.length - 1])}` : ''));
 
