@@ -37,6 +37,10 @@
  *   "Cuentas Colppy" volcado del plan de cuentas imputables (se reescribe en cada listado).
  *   "Bancos Colppy"  volcado de Tesorería/listado_banco (se reescribe en cada listado).
  *   "Control Colppy" la escribe el script: Colppy contra la fuente propia, por cuenta y día.
+ *   "Balance Colppy" balance de sumas y saldos al último día de cada mes descargado (todas las cuentas
+ *                    con movimientos). Una tanda de filas por mes: al volver a descargar un mes se
+ *                    reemplazan solo las filas de ese mes. No se edita a mano: se trabaja en otra hoja
+ *                    que lea de esta (SUMIFS por mes y código).
  *
  * Propiedades del script (Configuración del proyecto → Propiedades del script):
  *   COLPPY_INTEGRADOR_USUARIO    mail del usuario integrador (api.colppy.com/registro/)
@@ -64,11 +68,14 @@ const COLPPY = {
   UMBRAL_FCI: 0.05,              // cuentas que empiezan con "FCI"
   UMBRAL_OTRAS: 0.01,            // bancos y el resto
   PISO_ARS: 50000,               // una diferencia menor no se marca aunque supere el porcentaje
-  DIAS_REPASO: 40                // días hacia atrás en que se relee lo tomado de Colppy si cambió
+  DIAS_REPASO: 40,               // días hacia atrás en que se relee lo tomado de Colppy si cambió
+  HOJA_BALANCE: 'Balance Colppy'
 };
 const FUENTE_COLPPY = 'Colppy';
 const HEADERS_CONTROL_COLPPY = ['fecha', 'cuenta', 'moneda', 'Colppy', 'fuente propia', 'valor fuente propia',
                                 'diferencia', 'diferencia %', 'resultado', 'va a Saldos', 'actualizado'];
+const HEADERS_BALANCE_COLPPY = ['mes', 'código', 'cuenta', 'tipo de cuenta', 'saldo inicial',
+                                'debe del mes', 'haber del mes', 'saldo al cierre', 'actualizado'];
 const HEADERS_MAPEO_COLPPY = ['cuenta', 'moneda', 'código Colppy', 'descripción Colppy', 'notas'];
 const MAPEO_COLPPY_INICIAL = [
   ['Banco Galicia', 'ARS', '111100', 'respaldo si no hay CSV'],
@@ -571,6 +578,81 @@ function listarColppy() {
   }
   return `${cuentas.length} cuentas en "${COLPPY.HOJA_CUENTAS}" y ${bancos.length} banco(s) en "${COLPPY.HOJA_BANCOS}". ` +
          `Revisá la columna "descripción Colppy" de "${COLPPY.HOJA_MAPEO}".`;
+}
+
+// ---------- BALANCE ----------
+// Último mes cerrado, en yyyy-MM.
+function colppyUltimoMesCerrado() {
+  return sumarDias(hoyStr().slice(0, 8) + '01', -1).slice(0, 7);
+}
+
+// Balance de sumas y saldos al último día del mes (yyyy-MM), calculado con el libro diario:
+// saldo inicial = Debe − Haber hasta el último día del mes anterior; debe y haber = movimientos del mes;
+// saldo al cierre = inicial + debe − haber. Se reemplazan las filas de ese mes en "Balance Colppy".
+function descargarBalanceColppy(mesStr) {
+  const mes = String(mesStr || colppyUltimoMesCerrado()).trim();
+  const m = mes.match(/^(\d{4})-(\d{2})$/);
+  if (!m || +m[2] < 1 || +m[2] > 12) throw new Error(`mes inválido: ${mes}. Tiene que ser yyyy-MM (ejemplo 2026-09)`);
+  const ini = mes + '-01';
+  const siguiente = +m[2] === 12 ? `${+m[1] + 1}-01-01` : `${m[1]}-${String(+m[2] + 1).padStart(2, '0')}-01`;
+  const fin = sumarDias(siguiente, -1);
+  if (fin >= hoyStr()) throw new Error(`el ${fmtCorto(fin)} todavía no cerró: solo meses terminados`);
+
+  const plan = {};
+  colppyCuentas().forEach(c => (plan[String(c.idPlanCuenta).trim()] = c));
+  const por = {};
+  colppyDiarioCompleto().forEach(x => {
+    if (x.fecha > fin) return;
+    const a = por[x.cuenta] = por[x.cuenta] || { inicial: 0, debe: 0, haber: 0 };
+    if (x.fecha < ini) a.inicial += x.importe;
+    else if (x.importe >= 0) a.debe += x.importe;
+    else a.haber -= x.importe;
+  });
+
+  const tz = Session.getScriptTimeZone();
+  const fechaMes = Utilities.parseDate(fin, tz, 'yyyy-MM-dd');
+  const ahora = new Date();
+  let sinPlan = 0, totSaldo = 0, totDebe = 0, totHaber = 0;
+  const nuevas = Object.keys(por)
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+    .map(cod => {
+      const a = por[cod];
+      const inicial = colppyRedondear(a.inicial), debe = colppyRedondear(a.debe), haber = colppyRedondear(a.haber);
+      if (!inicial && !debe && !haber) return null;
+      const c = plan[cod];
+      if (!c) sinPlan++;
+      const saldo = colppyRedondear(inicial + debe - haber);
+      totSaldo += saldo; totDebe += debe; totHaber += haber;
+      return [fechaMes, cod, c ? String(c.Descripcion || '') : '(no está en el plan de cuentas imputables)',
+              c ? String(c.idTipoCuenta || '') : '', inicial, debe, haber, saldo, ahora];
+    })
+    .filter(Boolean);
+  if (!nuevas.length) throw new Error(`Colppy no tiene movimientos hasta el ${fmtCorto(fin)}`);
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sh = ss.getSheetByName(COLPPY.HOJA_BALANCE) || ss.insertSheet(COLPPY.HOJA_BALANCE);
+  const n = HEADERS_BALANCE_COLPPY.length;
+  const otras = sh.getLastRow() > 1
+    ? sh.getRange(2, 1, sh.getLastRow() - 1, n).getValues()
+        .filter(r => r[0] instanceof Date && Utilities.formatDate(r[0], tz, 'yyyy-MM-dd') !== fin)
+    : [];
+  const filas = otras.concat(nuevas).sort((a, b) =>
+    (a[0].getTime() - b[0].getTime()) || String(a[1]).localeCompare(String(b[1]), undefined, { numeric: true }));
+  sh.clearContents();
+  sh.getRange(1, 1, 1, n).setValues([HEADERS_BALANCE_COLPPY]).setFontWeight('bold');
+  sh.getRange(2, 2, filas.length, 1).setNumberFormat('@');
+  sh.getRange(2, 1, filas.length, n).setValues(filas);
+  sh.getRange(2, 1, filas.length, 1).setNumberFormat('yyyy-MM-dd');
+  sh.getRange(2, 5, filas.length, 4).setNumberFormat('#,##0.00');
+  sh.getRange(2, 9, filas.length, 1).setNumberFormat('yyyy-MM-dd HH:mm');
+  sh.setFrozenRows(1);
+
+  totSaldo = colppyRedondear(totSaldo);
+  const cuadra = Math.abs(totSaldo) < 0.01 && Math.abs(colppyRedondear(totDebe - totHaber)) < 0.01;
+  return `Balance al ${fmtCorto(fin)}: ${nuevas.length} cuentas en "${COLPPY.HOJA_BALANCE}". ` +
+         (cuadra ? 'Cuadra: saldos suman 0 y debe = haber del mes.'
+                 : `NO CUADRA: saldos suman ${totSaldo}, debe del mes ${colppyRedondear(totDebe)}, haber ${colppyRedondear(totHaber)}.`) +
+         (sinPlan ? ` ${sinPlan} código(s) con movimientos no están en el plan de cuentas imputables.` : '');
 }
 
 // ---------- DIAGNÓSTICO ----------

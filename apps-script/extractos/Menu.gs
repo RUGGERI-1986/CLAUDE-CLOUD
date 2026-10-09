@@ -36,7 +36,9 @@ function onOpen() {
     .addSubMenu(ui.createMenu('Colppy')
       .addItem('Listar cuentas y bancos de Colppy', 'menuListarColppy')
       .addItem('Probar Colppy (ayer)', 'menuProbarColppy')
-      .addItem('Probar Colppy (otra fecha)…', 'menuProbarColppyFecha'))
+      .addItem('Probar Colppy (otra fecha)…', 'menuProbarColppyFecha')
+      .addSeparator()
+      .addItem('Descargar balance de fin de mes…', 'menuBalanceColppy'))
     .addSeparator()
     .addItem('Ver estado del último día', 'menuEstado')
     .addItem('Probar valuación de FCIs', 'menuProbarFCI')
@@ -245,6 +247,17 @@ function menuProbarColppyFecha() {
   } catch (e) {
     SpreadsheetApp.getUi().alert('Error: ' + e.message);
   }
+}
+
+function menuBalanceColppy() {
+  const ui = SpreadsheetApp.getUi();
+  const def = colppyUltimoMesCerrado();
+  const r = ui.prompt('Balance de Colppy al último día del mes',
+    `Mes en formato yyyy-MM (ejemplo 2026-09). Vacío = ${def}.\n` +
+    'Si el mes ya estaba descargado, se reemplazan sus filas.', ui.ButtonSet.OK_CANCEL);
+  if (r.getSelectedButton() !== ui.Button.OK) return;
+  const mes = r.getResponseText().trim() || def;
+  correrConAviso('Descargando balance de Colppy ' + mes, () => descargarBalanceColppy(mes), 'Listo.');
 }
 
 // ---------- CORRIDAS ----------
