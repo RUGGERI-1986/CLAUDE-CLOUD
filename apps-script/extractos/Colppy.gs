@@ -9,11 +9,15 @@
  * Solo lectura: el script únicamente puede llamar a las operaciones de COLPPY_OPERACIONES_PERMITIDAS.
  * Cualquier otra (alta_asiento, borrar_asiento, etc.) se rechaza antes de llegar a Colppy.
  *
- * Saldo a una fecha: la API no tiene "saldo a fecha". Se toma el saldo actual de la cuenta
- * (Contabilidad/leer_saldoCuenta) y se le restan los movimientos con fecha contable posterior
- * (Contabilidad/listar_movimientosdiario), con signo Debe − Haber. VERIFICAR con "Probar Colppy":
- *   - que el signo dé bien (Banco Galicia tiene que dar el mismo signo que en Colppy);
- *   - si leer_saldoCuenta incluye movimientos con fecha futura (la prueba los informa aparte).
+ * Saldo a una fecha: suma de todos los movimientos del libro diario de la cuenta desde el inicio
+ * hasta esa fecha (Debe − Haber). Verificado contra producción (09/10/2026):
+ *   - leer_saldoCuenta responde "éxito" pero devuelve 0 para cualquier cuenta: NO se usa.
+ *   - listar_movimientosdiario acepta fromDate / toDate en formato aaaa-mm-dd y devuelve la lista en
+ *     "movimientos" con idPlanCuenta, fechaContable, DebitoCredito (D/C) e Importe.
+ *   - Si el formato de fecha es otro, IGNORA el filtro sin dar error y devuelve todo: por eso se
+ *     controla que cada movimiento esté dentro del rango pedido.
+ *   - Los movimientos con isNIIF = 1 (libro NIIF) se excluyen para no contarlos dos veces.
+ * Control: el saldo calculado de cada banco se compara con el saldo de Tesorería/listado_banco.
  *
  * Hojas:
  *   "Mapeo Colppy"   cuenta | moneda | código Colppy | descripción Colppy | notas
@@ -38,7 +42,8 @@ const COLPPY = {
   HOJA_MAPEO: 'Mapeo Colppy',
   HOJA_CUENTAS: 'Cuentas Colppy',
   HOJA_BANCOS: 'Bancos Colppy',
-  DIAS_FUTURO: 366,              // movimientos con fecha futura que se descuentan del saldo actual
+  DIARIO_DESDE: '2001-01-01',    // inicio del historial: el saldo es la suma desde acá
+  DIAS_FUTURO: 366,              // se piden también movimientos con fecha futura, para informarlos
   SESION_MS: 11 * 3600 * 1000    // la sesión dura 12 h desde el último uso; se renueva antes
 };
 const HEADERS_MAPEO_COLPPY = ['cuenta', 'moneda', 'código Colppy', 'descripción Colppy', 'notas'];
@@ -60,7 +65,7 @@ const HEADERS_BANCOS_COLPPY = ['idBanco', 'nombre', 'banco', 'nro. cuenta', 'mon
                                'código', 'saldo', 'última conciliación', 'multimoneda'];
 // Solo lectura. Usuario/iniciar_sesion se usa únicamente desde colppySesion().
 const COLPPY_OPERACIONES_PERMITIDAS = {
-  Contabilidad: ['listar_cuentasdiario', 'leer_saldoCuenta', 'listar_movimientosdiario'],
+  Contabilidad: ['listar_cuentasdiario', 'listar_movimientosdiario'],
   Tesoreria: ['listado_banco']
 };
 const _colppyCache = {};
@@ -201,10 +206,6 @@ function colppyFecha(v) {
   return null;
 }
 
-function colppyDMY(fechaStr) {
-  return fechaStr.split('-').reverse().join('-'); // yyyy-MM-dd → dd-MM-yyyy
-}
-
 function colppyRedondear(n) {
   return Math.round(n * 100) / 100;
 }
@@ -222,73 +223,59 @@ function colppyCuentaPorCodigo(codigo) {
   return c;
 }
 
-function colppySaldoActual(descripcion) {
-  const r = colppyLlamar('Contabilidad', 'leer_saldoCuenta', { planCuenta: descripcion });
-  const v = r.saldo !== undefined ? r.saldo : (r.data && r.data.saldo);
-  if (v === undefined || v === null || v === '') throw new Error(`leer_saldoCuenta no devolvió saldo para ${descripcion}`);
-  return colppyNum(v);
-}
-
-// Valor de un campo sin importar mayúsculas (la documentación vieja usa DESCRIPCION, la nueva Descripcion).
-function colppyCampo(obj, nombres) {
-  const claves = Object.keys(obj || {});
-  for (const n of nombres) {
-    const k = claves.find(x => x.toLowerCase() === n.toLowerCase());
-    if (k !== undefined && obj[k] !== null && obj[k] !== '') return obj[k];
-  }
-  return undefined;
-}
-
-// Movimientos del diario entre dos fechas (yyyy-MM-dd), de todas las cuentas. Se cachea por corrida.
-// La documentación nueva pide fechaDesde/fechaHasta (dd-mm-aaaa) y la vieja fromDate/toDate (aaaa-mm-dd);
-// producción respondió "Falta especificar la fecha Desde" con la nueva, así que se mandan las dos.
+// Libro diario entre dos fechas (yyyy-MM-dd), de todas las cuentas. Se cachea por corrida.
+// Producción acepta fromDate / toDate en aaaa-mm-dd y devuelve la lista en "movimientos".
 function colppyMovimientos(desdeStr, hastaStr) {
   const k = 'movs|' + desdeStr + '|' + hastaStr;
   if (_colppyCache[k]) return _colppyCache[k];
-  const r = colppyLlamar('Contabilidad', 'listar_movimientosdiario', {
-    fromDate: desdeStr, toDate: hastaStr,
-    fechaDesde: colppyDMY(desdeStr), fechaHasta: colppyDMY(hastaStr)
+  const r = colppyLlamar('Contabilidad', 'listar_movimientosdiario', { fromDate: desdeStr, toDate: hastaStr });
+  const crudos = Array.isArray(r.movimientos) ? r.movimientos : (Array.isArray(r.data) ? r.data : null);
+  if (!crudos) throw new Error('listar_movimientosdiario no devolvió la lista "movimientos" (claves: ' + Object.keys(r).join(', ') + ')');
+  const lista = [];
+  let niif = 0;
+  crudos.forEach(m => {
+    if (String(m.isNIIF) === '1') { niif++; return; }
+    const fecha = colppyFecha(m.fechaContable);
+    const dc = String(m.DebitoCredito || '').trim().toUpperCase();
+    if (!fecha) throw new Error('movimiento sin fechaContable legible: ' + JSON.stringify(m).slice(0, 200));
+    if (dc !== 'D' && dc !== 'C') throw new Error('movimiento con DebitoCredito inesperado: ' + JSON.stringify(m).slice(0, 200));
+    // Si Colppy ignoró el filtro de fechas, el saldo saldría mal: se frena.
+    if (fecha < desdeStr || fecha > hastaStr) {
+      throw new Error(`Colppy devolvió un movimiento del ${fecha} fuera del rango pedido (${desdeStr} a ${hastaStr}): ignoró el filtro de fechas`);
+    }
+    const importe = colppyNum(m.Importe);
+    lista.push({ cuenta: String(m.idPlanCuenta || '').trim(), fecha, importe: dc === 'D' ? importe : -importe });
   });
-  const crudos = Array.isArray(r.data) ? r.data : (Array.isArray(r) ? r : []);
-  const lista = crudos.map(m => ({
-    desc: String(colppyCampo(m, ['Descripcion', 'descripcionCuenta', 'cuenta', 'idPlanCuenta']) || '').trim(),
-    debe: colppyNum(colppyCampo(m, ['Debito', 'Debe'])),
-    haber: colppyNum(colppyCampo(m, ['Credito', 'Haber'])),
-    fecha: colppyFecha(colppyCampo(m, ['fechaContable', 'fecha', 'fechaAsiento']))
-  }));
-  lista.campos = crudos.length ? Object.keys(crudos[0]).join(', ') : '';
+  lista.niif = niif;
+  lista.total = crudos.length;
   _colppyCache[k] = lista;
   return lista;
 }
 
-function colppyEsDeCuenta(mov, cuenta) {
-  return mov.desc === String(cuenta.Descripcion).trim() ||
-         mov.desc.split(' - ')[0].trim() === String(cuenta.idPlanCuenta).trim();
+// Todo el historial, desde el inicio hasta un año adelante (incluye asientos con fecha futura).
+function colppyDiarioCompleto() {
+  return colppyMovimientos(COLPPY.DIARIO_DESDE, sumarDias(hoyStr(), COLPPY.DIAS_FUTURO));
 }
 
-// Saldo de una cuenta al cierre de fechaStr = saldo actual − (Debe − Haber) de los movimientos posteriores.
+// Saldo de una cuenta al cierre de fechaStr = suma (Debe − Haber) de sus movimientos hasta esa fecha.
 function colppySaldoAFecha(codigo, fechaStr) {
   const c = colppyCuentaPorCodigo(codigo);
-  const actual = colppySaldoActual(c.Descripcion);
+  const cod = String(c.idPlanCuenta).trim();
   const hoy = hoyStr();
-  const movs = colppyMovimientos(sumarDias(fechaStr, 1), sumarDias(hoy, COLPPY.DIAS_FUTURO))
-    .filter(m => colppyEsDeCuenta(m, c));
-  let posterior = 0, futuro = 0, nFuturo = 0, sinFecha = 0;
-  movs.forEach(m => {
-    const d = m.debe - m.haber;
-    posterior += d;
-    if (!m.fecha) sinFecha++;
-    else if (m.fecha > hoy) { futuro += d; nFuturo++; }
+  let valor = 0, n = 0, total = 0, futuro = 0, nFuturo = 0;
+  colppyDiarioCompleto().forEach(m => {
+    if (m.cuenta !== cod) return;
+    total += m.importe;
+    if (m.fecha <= fechaStr) { valor += m.importe; n++; }
+    if (m.fecha > hoy) { futuro += m.importe; nFuturo++; }
   });
   return {
     descripcion: c.Descripcion,
-    actual,
-    n: movs.length,
-    posterior: colppyRedondear(posterior),
+    valor: colppyRedondear(valor),
+    n,
+    total: colppyRedondear(total),
     nFuturo,
-    futuro: colppyRedondear(futuro),
-    sinFecha,
-    valor: colppyRedondear(actual - posterior)
+    futuro: colppyRedondear(futuro)
   };
 }
 
@@ -377,7 +364,8 @@ function listarColppy() {
 }
 
 // ---------- DIAGNÓSTICO ----------
-// Saldo de cada cuenta mapeada al cierre de la fecha, comparado con lo que hoy tiene la hoja Saldos.
+// Saldo de cada cuenta mapeada al cierre de la fecha, comparado con lo que hoy tiene la hoja Saldos,
+// y control del cálculo: saldo calculado de cada banco contra el saldo que informa Tesorería.
 function probarColppy(fechaStr) {
   const tz = Session.getScriptTimeZone();
   const ayer = sumarDias(hoyStr(), -1);
@@ -386,9 +374,32 @@ function probarColppy(fechaStr) {
 
   const s = colppySesion(false);
   const lineas = [
-    `Entorno: ${colppyUrl() === COLPPY.URL_STAGING ? 'staging' : 'producción'} · usuario ${s.usuario} · empresa ${s.idEmpresa}`,
-    `Saldos al ${fmtCorto(f)} (saldo actual − movimientos posteriores, signo Debe − Haber):`
+    `Entorno: ${colppyUrl() === COLPPY.URL_STAGING ? 'staging' : 'producción'} · usuario ${s.usuario} · empresa ${s.idEmpresa}`
   ];
+
+  const diario = colppyDiarioCompleto();
+  const fechas = diario.map(m => m.fecha).sort();
+  lineas.push(`Libro diario: ${diario.total} movimiento(s) leídos` +
+              (diario.niif ? `, ${diario.niif} NIIF excluidos` : '') +
+              (fechas.length ? ` · del ${fmtCorto(fechas[0])} al ${fmtCorto(fechas[fechas.length - 1])}` : ''));
+
+  // Control del cálculo: bancos de Tesorería (saldo del momento) contra la suma de todo el diario
+  lineas.push('');
+  lineas.push('Control: saldo calculado (todo el diario) contra Tesorería:');
+  try {
+    const bancos = colppyBancos();
+    if (!bancos.length) lineas.push('  (Tesorería no devolvió bancos)');
+    bancos.forEach(b => {
+      const cod = String(b.planCuentaId || '').trim();
+      const tes = colppyNum(b.saldo);
+      const calc = colppyRedondear(diario.filter(m => m.cuenta === cod).reduce((t, m) => t + m.importe, 0));
+      const dif = colppyRedondear(calc - tes);
+      lineas.push(`  ${cod} ${b.Nombre} (${b.Moneda}): calculado ${calc} · Tesorería ${tes} · ` +
+                  (Math.abs(dif) < 0.01 ? 'OK' : `DIFERENCIA ${dif}`));
+    });
+  } catch (e) {
+    lineas.push('  ERROR ' + e.message);
+  }
 
   // Valor de la hoja Saldos de esa fecha, para comparar
   const enSaldos = {};
@@ -403,20 +414,9 @@ function probarColppy(fechaStr) {
     const k = m.cuenta + '|' + m.moneda;
     (grupos[k] = grupos[k] || []).push(m);
   });
+  lineas.push('');
+  lineas.push(`Saldos al ${fmtCorto(f)} (suma Debe − Haber hasta esa fecha):`);
   if (!Object.keys(grupos).length) lineas.push(`La hoja "${COLPPY.HOJA_MAPEO}" no tiene códigos cargados.`);
-
-  // Cuántos movimientos devolvió el diario y con qué campos (para validar el formato de la respuesta)
-  try {
-    const movs = colppyMovimientos(sumarDias(f, 1), sumarDias(hoyStr(), COLPPY.DIAS_FUTURO));
-    const sinCuenta = movs.filter(m => !m.desc).length;
-    const sinFecha = movs.filter(m => !m.fecha).length;
-    lineas.push(`Diario posterior al ${fmtCorto(f)}: ${movs.length} movimiento(s)` +
-                (movs.length ? ` · campos: ${movs.campos}` : '') +
-                (sinCuenta ? ` ⚠ ${sinCuenta} sin cuenta legible` : '') +
-                (sinFecha ? ` ⚠ ${sinFecha} sin fecha legible` : ''));
-  } catch (e) {
-    lineas.push('Diario: ERROR ' + e.message);
-  }
 
   Object.keys(grupos).forEach(k => {
     lineas.push('');
@@ -426,9 +426,8 @@ function probarColppy(fechaStr) {
       try {
         const x = colppySaldoAFecha(m.codigo, f);
         total += x.valor;
-        lineas.push(`  ${x.descripcion}: ${x.valor} = actual ${x.actual} − ${x.n} mov. posterior(es) por ${x.posterior}` +
-                    (x.nFuturo ? ` (de ellos ${x.nFuturo} con fecha futura por ${x.futuro})` : '') +
-                    (x.sinFecha ? ` ⚠ ${x.sinFecha} sin fecha legible` : ''));
+        lineas.push(`  ${x.descripcion}: ${x.valor} (${x.n} mov.) · hoy ${x.total}` +
+                    (x.nFuturo ? ` · ${x.nFuturo} con fecha futura por ${x.futuro}` : ''));
       } catch (e) {
         ok = false;
         lineas.push(`  ${m.codigo}: ERROR ${e.message}`);
@@ -445,17 +444,6 @@ function probarColppy(fechaStr) {
       lineas.push(`  = ${total} · en Saldos ${h.valor} (${h.fuente}) · diferencia ${dif}${pct}`);
     }
   });
-
-  lineas.push('');
-  lineas.push('Bancos (Tesorería/listado_banco, saldo del momento):');
-  try {
-    const bancos = colppyBancos();
-    if (!bancos.length) lineas.push('  (sin bancos)');
-    bancos.forEach(b => lineas.push(`  ${b.Nombre} · ${b.Moneda} · saldo ${b.saldo} · multimoneda ${b.esMultimoneda} · ` +
-                                    `conciliado al ${b.ultimaConciliacion || '—'} · cuenta ${b.planCuentaId || b.idPlanCuenta}`));
-  } catch (e) {
-    lineas.push('  ERROR ' + e.message);
-  }
 
   const texto = lineas.join('\n');
   console.log(texto);
