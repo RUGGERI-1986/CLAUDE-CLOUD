@@ -30,6 +30,9 @@
  * 4) repasarPendientes() → vuelve a leer los últimos días con cuentas automáticas sin "al día"
  *    (QBO del viernes que se carga el lunes, archivo subido tarde).
  * 5) FCIs (FCI.gs), QuickBooks (QBO.gs) y cierre de mes (Cierre.gs) se suman a las fuentes.
+ * 6) Colppy (Colppy.gs): respaldo de todas las cuentas en pesos de "Mapeo Colppy". Si la fuente propia
+ *    (CSV, tenencias) no tiene el dato al día, el saldo sale de Colppy, con control contra el último
+ *    dato propio. Las cuentas sin fuente propia (Consultatio SRL ARS, Plazo fijo) salen de Colppy.
  *
  * Fecha de corte por defecto: ayer. Con la de hoy, Base Cotiz. todavía no tiene cotización.
  * Mercury y Kraken dan el saldo del momento: solo se leen en la corrida de ayer y una vez por día.
@@ -77,9 +80,10 @@ const FUENTES_SALDO = {
 };
 
 // Fuentes fijas + una por cada FCI de Tenencias FCI + una por cada cuenta mapeada en QBO.
-// Si una cuenta está en más de un lugar, manda el último (QBO).
+// Si una cuenta está en más de un lugar, manda el último (QBO). Colppy queda como respaldo de las
+// cuentas en pesos de "Mapeo Colppy" (ver conColppy en Colppy.gs).
 function todasLasFuentes() {
-  return Object.assign({}, FUENTES_SALDO, fuentesFCI(), fuentesQBO());
+  return conColppy(Object.assign({}, FUENTES_SALDO, fuentesFCI(), fuentesQBO()));
 }
 
 // ---------- AUXILIARES DE LA HOJA SALDOS ----------
@@ -210,9 +214,10 @@ function actualizarSaldos(fechaCorte) {
     if (f) {
       // Ya leída = misma fuente, al día y leída después del cierre del día. Si quedó "último
       // disponible" (archivo subido tarde, VCP sin publicar, QBO sin actualizar) o se leyó antes de
-      // que terminara el día, se vuelve a leer.
-      const yaLeida = existente && existente.fuente === f.fuente && existente.estado.indexOf('al día') === 0 &&
-                      existente.actualizado > fin.getTime();
+      // que terminara el día, se vuelve a leer. Lo tomado de Colppy se relee siempre: el contador
+      // puede cargar asientos de esa fecha después.
+      const yaLeida = existente && existente.fuente === f.fuente && existente.fuente !== FUENTE_COLPPY &&
+                      existente.estado.indexOf('al día') === 0 && existente.actualizado > fin.getTime();
       const fueraDeVentana = f.unaVez && fechaStr !== ayerStr; // saldo del momento: no sirve para otra fecha
       if (!yaLeida && !fueraDeVentana) {
         try {
@@ -222,7 +227,7 @@ function actualizarSaldos(fechaCorte) {
             if (!isFinite(s.valor)) throw new Error('saldo no numérico: ' + s.valor);
             // La fuente puede traer su propio estado (ej: FCI con suscripciones sin tenencia nueva)
             const estado = s.estado || (s.fresco !== false ? 'al día' : 'último disponible');
-            const fila = [ini, c.cuenta, c.moneda, Math.round(s.valor * 100) / 100, f.fuente, estado, new Date()];
+            const fila = [ini, c.cuenta, c.moneda, Math.round(s.valor * 100) / 100, s.fuente || f.fuente, estado, new Date()];
             if (existente) sh.getRange(existente.fila, 1, 1, N_AUTO).setValues([fila]);
             else agregar.push(fila);
             leidos.push(`${clave}: ${fila[3]}${estado.indexOf('al día') === 0 ? '' : ' (' + estado + ')'}`);
@@ -484,21 +489,36 @@ function aplicarCorrecciones() {
 
 // ---------- REPASO DE DÍAS PENDIENTES ----------
 // Cada corrida mira solo ayer. Esto vuelve sobre los últimos días con cuentas automáticas sin
-// "al día" (ej: el viernes de QBO, que se carga el lunes a la tarde).
+// "al día" (ej: el viernes de QBO, que se carga el lunes a la tarde) y sobre los días tomados de
+// Colppy que hay que releer (ver colppyFechasARepasar en Colppy.gs).
 function repasarPendientes() {
   const tz = Session.getScriptTimeZone();
   const hoy = hoyStr();
   const ayer = sumarDias(hoy, -1);
   const desde = sumarDias(hoy, -1 - DIAS_REPASO);
+  const desdeColppy = sumarDias(hoy, -1 - COLPPY.DIAS_REPASO);
   const fuentes = todasLasFuentes();
   const fechas = new Set();
+  const filasColppy = [];
   leerSaldos(hojaSaldos()).forEach(r => {
     if (!(r[0] instanceof Date) || !vacio(r[COL_MANUAL - 1])) return;
     const f = Utilities.formatDate(r[0], tz, 'yyyy-MM-dd');
-    if (f < desde || f >= ayer) return;
-    const fu = fuentes[String(r[1]).trim() + '|' + String(r[2]).trim()];
+    if (f >= ayer) return;
+    const clave = String(r[1]).trim() + '|' + String(r[2]).trim();
+    if (f >= desdeColppy && String(r[4]).trim() === FUENTE_COLPPY) {
+      filasColppy.push({ fecha: f, clave, valor: Number(r[3]) });
+    }
+    if (f < desde) return;
+    const fu = fuentes[clave];
     if (fu && !fu.unaVez && String(r[5]).trim().indexOf('al día') !== 0) fechas.add(f);
   });
+  if (filasColppy.length) {
+    try {
+      colppyFechasARepasar(filasColppy, fuentes, desde).forEach(f => fechas.add(f));
+    } catch (e) {
+      console.error('repaso Colppy: ' + e.message);
+    }
+  }
   const lista = Array.from(fechas).sort();
   const hechas = [];
   for (const f of lista) {

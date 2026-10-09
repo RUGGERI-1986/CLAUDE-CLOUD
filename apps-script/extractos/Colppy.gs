@@ -1,10 +1,20 @@
 /**
  * Colppy (contabilidad de la SRL) → EXTRACTOS BANCARIOS. Archivo nuevo en el proyecto de EXTRACTOS.
  *
- * FASE 1: SOLO DIAGNÓSTICO. Este archivo se conecta a Colppy, lista cuentas y bancos y calcula el
- * saldo de las cuentas mapeadas a una fecha, para comparar contra la hoja Saldos. NO escribe en
- * Saldos ni en Base CP y no cambia ninguna fuente. La integración (Galicia con respaldo de Colppy,
- * FCI e ICBC desde Colppy con control) es la fase 2, una vez validados los números.
+ * Colppy es el RESPALDO DIARIO de todas las cuentas en pesos de "Mapeo Colppy" (conColppy, que usa
+ * todasLasFuentes de saldosbasecp.gs):
+ *   - Si la fuente propia de la cuenta (CSV del banco, Tenencias FCI) tiene el dato al día, manda ella.
+ *   - Si no (no se subió el CSV, falta la tenencia o el VCP), el saldo sale de Colppy, con fuente
+ *     "Colppy" en la hoja Saldos.
+ *   - Las cuentas sin fuente propia (Consultatio SRL ARS, Plazo fijo) salen siempre de Colppy.
+ *   - Solo cuentas en ARS: Colppy tiene las cuentas en dólares pasadas a pesos. Las filas USD del
+ *     mapeo se usan solo en "Probar Colppy".
+ * Control (sin mail): el valor de Colppy se compara con el último dato de la fuente propia.
+ *   Si difiere más del umbral (5% FCI, 1% el resto) y más de 50.000 ARS, la fila queda en beige con
+ *   el detalle en la columna estado. Sin dato propio para comparar: "al día (Colppy, sin control)".
+ *   Cada comparación queda en la hoja "Control Colppy", una fila por cuenta y día.
+ * Los días tomados de Colppy se releen solos (repasarPendientes) si Colppy cambió después o si, en
+ * los últimos días, apareció el dato propio (CSV subido tarde).
  *
  * Solo lectura: el script únicamente puede llamar a las operaciones de COLPPY_OPERACIONES_PERMITIDAS.
  * Cualquier otra (alta_asiento, borrar_asiento, etc.) se rechaza antes de llegar a Colppy.
@@ -26,6 +36,7 @@
  *                    "descripción Colppy" la completa "Listar cuentas y bancos".
  *   "Cuentas Colppy" volcado del plan de cuentas imputables (se reescribe en cada listado).
  *   "Bancos Colppy"  volcado de Tesorería/listado_banco (se reescribe en cada listado).
+ *   "Control Colppy" la escribe el script: Colppy contra la fuente propia, por cuenta y día.
  *
  * Propiedades del script (Configuración del proyecto → Propiedades del script):
  *   COLPPY_INTEGRADOR_USUARIO    mail del usuario integrador (api.colppy.com/registro/)
@@ -47,12 +58,21 @@ const COLPPY = {
   DIAS_FUTURO: 366,              // se piden también movimientos con fecha futura, para informarlos
   LOTE: 500,                     // movimientos por página del libro diario
   MAX_PAGINAS: 200,              // tope de páginas por corrida (100.000 movimientos)
-  SESION_MS: 11 * 3600 * 1000    // la sesión dura 12 h desde el último uso; se renueva antes
+  SESION_MS: 11 * 3600 * 1000,   // la sesión dura 12 h desde el último uso; se renueva antes
+  HOJA_CONTROL: 'Control Colppy',
+  MONEDA: 'ARS',                 // única moneda que Colppy tiene en su moneda original
+  UMBRAL_FCI: 0.05,              // cuentas que empiezan con "FCI"
+  UMBRAL_OTRAS: 0.01,            // bancos y el resto
+  PISO_ARS: 50000,               // una diferencia menor no se marca aunque supere el porcentaje
+  DIAS_REPASO: 40                // días hacia atrás en que se relee lo tomado de Colppy si cambió
 };
+const FUENTE_COLPPY = 'Colppy';
+const HEADERS_CONTROL_COLPPY = ['fecha', 'cuenta', 'moneda', 'Colppy', 'fuente propia', 'valor fuente propia',
+                                'diferencia', 'diferencia %', 'resultado', 'va a Saldos', 'actualizado'];
 const HEADERS_MAPEO_COLPPY = ['cuenta', 'moneda', 'código Colppy', 'descripción Colppy', 'notas'];
 const MAPEO_COLPPY_INICIAL = [
-  ['Banco Galicia', 'ARS', '111100', 'fase 2: respaldo si no hay CSV'],
-  ['Banco ICBC', 'ARS', '111101', 'fase 2: fuente, control 1% contra CSV'],
+  ['Banco Galicia', 'ARS', '111100', 'respaldo si no hay CSV'],
+  ['Banco ICBC', 'ARS', '111101', 'respaldo si no hay CSV'],
   ['FCI Galicia', 'ARS', '113001', 'Fima Premium A'],
   ['FCI Galicia', 'ARS', '113002', 'Fima Ahorro Pesos'],
   ['FCI Galicia', 'ARS', '113003', 'Fima Ahorro Plus A'],
@@ -288,14 +308,22 @@ function colppyDiarioCompleto() {
   return colppyMovimientos(COLPPY.DIARIO_DESDE, sumarDias(hoyStr(), COLPPY.DIAS_FUTURO));
 }
 
+// Movimientos del diario agrupados por código de cuenta. Se arma una vez por corrida.
+function colppyPorCuenta() {
+  if (_colppyCache.porCuenta) return _colppyCache.porCuenta;
+  const por = {};
+  colppyDiarioCompleto().forEach(m => (por[m.cuenta] = por[m.cuenta] || []).push(m));
+  _colppyCache.porCuenta = por;
+  return por;
+}
+
 // Saldo de una cuenta al cierre de fechaStr = suma (Debe − Haber) de sus movimientos hasta esa fecha.
 function colppySaldoAFecha(codigo, fechaStr) {
   const c = colppyCuentaPorCodigo(codigo);
   const cod = String(c.idPlanCuenta).trim();
   const hoy = hoyStr();
   let valor = 0, n = 0, total = 0, futuro = 0, nFuturo = 0;
-  colppyDiarioCompleto().forEach(m => {
-    if (m.cuenta !== cod) return;
+  (colppyPorCuenta()[cod] || []).forEach(m => {
     total += m.importe;
     if (m.fecha <= fechaStr) { valor += m.importe; n++; }
     if (m.fecha > hoy) { futuro += m.importe; nFuturo++; }
@@ -347,6 +375,157 @@ function leerMapeoColppy() {
       fila: i + 2
     }))
     .filter(m => m.cuenta && m.codigo);
+}
+
+// ---------- RESPALDO DIARIO (lo usa todasLasFuentes de saldosbasecp.gs) ----------
+// Cuentas en pesos del mapeo: {"Banco Galicia|ARS": ['111100'], "FCI Galicia|ARS": ['113001', …]}.
+function colppyGrupos() {
+  const grupos = {};
+  leerMapeoColppy().filter(m => m.moneda === COLPPY.MONEDA).forEach(m => {
+    const k = m.cuenta + '|' + m.moneda;
+    (grupos[k] = grupos[k] || []).push(m.codigo);
+  });
+  return grupos;
+}
+
+function colppySaldoGrupo(codigos, fechaStr) {
+  return colppyRedondear(codigos.reduce((t, cod) => t + colppySaldoAFecha(cod, fechaStr).valor, 0));
+}
+
+// Envuelve las fuentes: cada cuenta del mapeo pasa a leerse con saldoConColppy. Las que no tenían
+// fuente propia quedan con fuente "Colppy". Si el mapeo no se puede leer, las fuentes quedan como estaban.
+function conColppy(fuentes) {
+  let grupos;
+  try {
+    grupos = colppyGrupos();
+  } catch (e) {
+    console.error('Colppy: no se pudo leer el mapeo, sin respaldo de Colppy: ' + e.message);
+    return fuentes;
+  }
+  Object.keys(grupos).forEach(clave => {
+    const propia = fuentes[clave];
+    const codigos = grupos[clave];
+    fuentes[clave] = {
+      fuente: propia ? propia.fuente : FUENTE_COLPPY,
+      unaVez: propia ? propia.unaVez : false,
+      fn: ctx => saldoConColppy(ctx, clave, propia, codigos)
+    };
+  });
+  return fuentes;
+}
+
+// Fuente propia al día → manda. Si no, Colppy, con control contra el último dato propio.
+// Devuelve el mismo formato que las demás fuentes, más "fuente" cuando el saldo sale de Colppy.
+function saldoConColppy(ctx, clave, propia, codigos) {
+  let p = null, errPropia = '';
+  if (propia) {
+    try {
+      const r = propia.fn(ctx);
+      if (r != null) {
+        p = typeof r === 'number' ? { valor: r, fresco: true } : r;
+        if (!isFinite(p.valor)) throw new Error('saldo no numérico: ' + p.valor);
+      }
+    } catch (e) {
+      p = null;
+      errPropia = e.message;
+    }
+  }
+  const propiaAlDia = !!p && p.fresco !== false && (!p.estado || p.estado.indexOf('al día') === 0);
+
+  let c = null, errColppy = '';
+  try {
+    c = colppySaldoGrupo(codigos, ctx.fechaStr);
+  } catch (e) {
+    errColppy = e.message;
+  }
+
+  const control = c == null ? null : colppyControl(clave, c, p);
+  const usada = propiaAlDia ? propia.fuente : (c != null ? FUENTE_COLPPY : (p ? propia.fuente : ''));
+  try {
+    registrarControlColppy(ctx, clave, c, propia, p, control, usada, errColppy);
+  } catch (e) {
+    console.error(`Control Colppy ${clave}: ${e.message}`);
+  }
+
+  if (propiaAlDia) return p;
+  if (c == null) {
+    if (p) return Object.assign({}, p, { estado: (p.estado || 'último disponible') + ' · Colppy falló: ' + errColppy });
+    throw new Error(`sin dato propio${errPropia ? ' (' + errPropia + ')' : ''} y Colppy falló: ${errColppy}`);
+  }
+  const estado = control.estado + (errPropia ? ` · ${propia.fuente} falló: ${errPropia}` : '');
+  return { valor: c, fresco: control.ok, fuente: FUENTE_COLPPY, estado };
+}
+
+// Compara Colppy con el último dato de la fuente propia (p puede ser null: sin control).
+function colppyControl(clave, c, p) {
+  if (!p) return { ok: true, resultado: 'sin control', estado: 'al día (Colppy, sin control)' };
+  const dif = colppyRedondear(c - p.valor);
+  const pct = p.valor ? Math.abs(dif) / Math.abs(p.valor) : (dif ? Infinity : 0);
+  const umbral = clave.indexOf('FCI') === 0 ? COLPPY.UMBRAL_FCI : COLPPY.UMBRAL_OTRAS;
+  const pctTxt = isFinite(pct) ? (pct * 100).toFixed(1) + '%' : 'sin base';
+  const ok = Math.abs(dif) <= COLPPY.PISO_ARS || pct <= umbral;
+  return {
+    ok, dif, pct,
+    resultado: ok ? 'OK' : 'DIFERENCIA',
+    estado: ok ? `al día (Colppy; difiere ${pctTxt} del último dato propio)`
+               : `Colppy: difiere ${pctTxt} (${dif}) del último dato propio (${p.valor}); umbral ${umbral * 100}%`
+  };
+}
+
+// Hoja "Control Colppy": una fila por fecha y cuenta; si ya existe, se reescribe.
+function registrarControlColppy(ctx, clave, c, propia, p, control, usada, errColppy) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sh = ss.getSheetByName(COLPPY.HOJA_CONTROL);
+  if (!sh) {
+    sh = ss.insertSheet(COLPPY.HOJA_CONTROL);
+    sh.getRange(1, 1, 1, HEADERS_CONTROL_COLPPY.length).setValues([HEADERS_CONTROL_COLPPY]).setFontWeight('bold');
+    sh.getRange('A:A').setNumberFormat('dd/MM/yyyy');
+    sh.getRange('D:G').setNumberFormat('#,##0.00');
+    sh.getRange('H:H').setNumberFormat('0.0%');
+    sh.getRange('K:K').setNumberFormat('dd/MM/yyyy HH:mm');
+    sh.setFrozenRows(1);
+  }
+  if (!_colppyCache.control) {
+    const idx = {};
+    if (sh.getLastRow() > 1) {
+      sh.getRange(2, 1, sh.getLastRow() - 1, 3).getValues().forEach((r, i) => {
+        if (r[0] instanceof Date) {
+          idx[Utilities.formatDate(r[0], ctx.tz, 'yyyy-MM-dd') + '|' + String(r[1]).trim() + '|' + String(r[2]).trim()] = i + 2;
+        }
+      });
+    }
+    _colppyCache.control = idx;
+  }
+  const [cuenta, moneda] = clave.split('|');
+  const resultado = c == null ? 'error Colppy: ' + errColppy : control.resultado;
+  const fila = [ctx.ini, cuenta, moneda, c == null ? '' : c, propia ? propia.fuente : '', p ? p.valor : '',
+                control && p ? control.dif : '', control && p && isFinite(control.pct) ? control.pct : '',
+                resultado, usada, new Date()];
+  const k = ctx.fechaStr + '|' + clave;
+  const n = _colppyCache.control[k] || sh.getLastRow() + 1;
+  _colppyCache.control[k] = n;
+  sh.getRange(n, 1, 1, fila.length).setValues([fila]);
+  sh.getRange(n, 9).setBackground(c != null && control.ok ? null : BEIGE);
+}
+
+// Fechas a releer entre las filas de Saldos con fuente "Colppy" (filas: [{fecha, clave, valor}]):
+//   - el saldo de Colppy de esa fecha cambió (el contador cargó asientos después), o
+//   - la cuenta tiene fuente propia y la fecha es posterior a desdePropia (el CSV pudo subirse tarde).
+function colppyFechasARepasar(filas, fuentes, desdePropia) {
+  const grupos = colppyGrupos();
+  const fechas = new Set();
+  filas.forEach(x => {
+    if (fechas.has(x.fecha)) return;
+    const fu = fuentes[x.clave];
+    if (fu && fu.fuente !== FUENTE_COLPPY && x.fecha >= desdePropia) {
+      fechas.add(x.fecha);
+      return;
+    }
+    const codigos = grupos[x.clave];
+    if (!codigos) return;
+    if (Math.abs(colppySaldoGrupo(codigos, x.fecha) - x.valor) >= 0.01) fechas.add(x.fecha);
+  });
+  return fechas;
 }
 
 // ---------- LISTADO ----------
