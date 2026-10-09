@@ -185,6 +185,7 @@ function colppyNum(v) {
   if (s === '') return 0;
   if (s.indexOf(',') >= 0 && s.indexOf('.') >= 0) s = s.replace(/\./g, '').replace(',', '.'); // 1.234,56
   else if (s.indexOf(',') >= 0) s = s.replace(',', '.');
+  else if ((s.match(/\./g) || []).length > 1) s = s.replace(/\./g, '');                      // 1.234.567
   const n = Number(s);
   if (!isFinite(n)) throw new Error('importe no numérico en la respuesta de Colppy: ' + v);
   return n;
@@ -228,18 +229,34 @@ function colppySaldoActual(descripcion) {
   return colppyNum(v);
 }
 
+// Valor de un campo sin importar mayúsculas (la documentación vieja usa DESCRIPCION, la nueva Descripcion).
+function colppyCampo(obj, nombres) {
+  const claves = Object.keys(obj || {});
+  for (const n of nombres) {
+    const k = claves.find(x => x.toLowerCase() === n.toLowerCase());
+    if (k !== undefined && obj[k] !== null && obj[k] !== '') return obj[k];
+  }
+  return undefined;
+}
+
 // Movimientos del diario entre dos fechas (yyyy-MM-dd), de todas las cuentas. Se cachea por corrida.
+// La documentación nueva pide fechaDesde/fechaHasta (dd-mm-aaaa) y la vieja fromDate/toDate (aaaa-mm-dd);
+// producción respondió "Falta especificar la fecha Desde" con la nueva, así que se mandan las dos.
 function colppyMovimientos(desdeStr, hastaStr) {
   const k = 'movs|' + desdeStr + '|' + hastaStr;
   if (_colppyCache[k]) return _colppyCache[k];
-  const r = colppyLlamar('Contabilidad', 'listar_movimientosdiario',
-    { fechaDesde: colppyDMY(desdeStr), fechaHasta: colppyDMY(hastaStr) });
-  const lista = (Array.isArray(r.data) ? r.data : []).map(m => ({
-    desc: String(m.Descripcion || '').trim(),
-    debe: colppyNum(m.Debito),
-    haber: colppyNum(m.Credito),
-    fecha: colppyFecha(m.fechaContable)
+  const r = colppyLlamar('Contabilidad', 'listar_movimientosdiario', {
+    fromDate: desdeStr, toDate: hastaStr,
+    fechaDesde: colppyDMY(desdeStr), fechaHasta: colppyDMY(hastaStr)
+  });
+  const crudos = Array.isArray(r.data) ? r.data : (Array.isArray(r) ? r : []);
+  const lista = crudos.map(m => ({
+    desc: String(colppyCampo(m, ['Descripcion', 'descripcionCuenta', 'cuenta', 'idPlanCuenta']) || '').trim(),
+    debe: colppyNum(colppyCampo(m, ['Debito', 'Debe'])),
+    haber: colppyNum(colppyCampo(m, ['Credito', 'Haber'])),
+    fecha: colppyFecha(colppyCampo(m, ['fechaContable', 'fecha', 'fechaAsiento']))
   }));
+  lista.campos = crudos.length ? Object.keys(crudos[0]).join(', ') : '';
   _colppyCache[k] = lista;
   return lista;
 }
@@ -387,6 +404,19 @@ function probarColppy(fechaStr) {
     (grupos[k] = grupos[k] || []).push(m);
   });
   if (!Object.keys(grupos).length) lineas.push(`La hoja "${COLPPY.HOJA_MAPEO}" no tiene códigos cargados.`);
+
+  // Cuántos movimientos devolvió el diario y con qué campos (para validar el formato de la respuesta)
+  try {
+    const movs = colppyMovimientos(sumarDias(f, 1), sumarDias(hoyStr(), COLPPY.DIAS_FUTURO));
+    const sinCuenta = movs.filter(m => !m.desc).length;
+    const sinFecha = movs.filter(m => !m.fecha).length;
+    lineas.push(`Diario posterior al ${fmtCorto(f)}: ${movs.length} movimiento(s)` +
+                (movs.length ? ` · campos: ${movs.campos}` : '') +
+                (sinCuenta ? ` ⚠ ${sinCuenta} sin cuenta legible` : '') +
+                (sinFecha ? ` ⚠ ${sinFecha} sin fecha legible` : ''));
+  } catch (e) {
+    lineas.push('Diario: ERROR ' + e.message);
+  }
 
   Object.keys(grupos).forEach(k => {
     lineas.push('');
