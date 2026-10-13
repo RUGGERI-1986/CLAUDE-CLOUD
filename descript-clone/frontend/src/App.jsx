@@ -11,6 +11,8 @@ function download(blob, name) {
   URL.revokeObjectURL(a.href)
 }
 
+const newVideo = () => { location.href = location.pathname }
+
 function Upload({ onProject }) {
   const [busy, setBusy] = useState(false)
   const [over, setOver] = useState(false)
@@ -188,7 +190,14 @@ function Editor({ id }) {
   }
 
   if (!project) return <div className="center">{error ? <p className="err">{error}</p> : 'Cargando…'}</div>
-  if (project.status === 'error') return <div className="center"><p className="err">Falló la transcripción: {project.error}</p></div>
+  if (project.status === 'error') return (
+    <div className="center">
+      <div>
+        <p className="err">Falló la transcripción: {project.error}</p>
+        <button onClick={newVideo}>Subir otro video</button>
+      </div>
+    </div>
+  )
   if (project.status === 'transcribing') return <div className="center"><p>Transcribiendo… (la primera vez descarga el modelo)</p></div>
 
   const isVideo = /\.(mp4|mov|webm|mkv|avi|m4v)$/i.test(project.file)
@@ -198,6 +207,7 @@ function Editor({ id }) {
   return (
     <div className="app">
       <aside className="side">
+        <button className="ghost" onClick={newVideo}>← Nuevo video</button>
         <Media ref={media} src={`/api/projects/${id}/media`} controls />
         <div className="tools">
           <button className="ghost" onClick={undo} disabled={!past.length}>Deshacer</button>
