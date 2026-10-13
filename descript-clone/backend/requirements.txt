@@ -1,0 +1,5 @@
+fastapi
+uvicorn[standard]
+python-multipart
+faster-whisper
+av<19  # av 19 quitó metadata_errors, que usa faster-whisper 1.2.1
