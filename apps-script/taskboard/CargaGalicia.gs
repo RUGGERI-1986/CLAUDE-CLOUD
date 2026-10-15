@@ -15,14 +15,13 @@
  *
  * ── MONTO QUE SE TRANSFIERE ──────────────────────────────────────────────────────────────────
  *   C → MONTO de la agrupada (el de la factura).
- *   A → MONTO A PAGAR: el neto de retenciones, que cargás a mano en esa columna. Va a la derecha
- *       de todo (después de APROB. PAYPAL), FUERA de AGRUP_HEADERS, igual que la columna de PayPal,
- *       para no cambiar nada de lo que ya leen los demás archivos.
+ *   A → MONTO A PAGAR: el neto de retenciones, que cargás a mano en esa columna de la agrupada,
+ *       entre COMENTARIO ANTERIOR y LINKS (AGRUP_COL.PAGAR, Hojaagrupada.gs).
  *       Se preserva al regenerar por el CONJUNTO EXACTO de IDs de la fila: si cambia la composición
  *       del grupo, el neto ya no corresponde a esas facturas y se pierde a propósito.
  *       ⚠️ Solo se preserva si la agrupada se regenera desde el menú (menuGenerarAgrupada /
  *       menuActualizarAgrupada). Si corrés generarHojaAgrupadaDelDia a mano desde el editor, la
- *       columna desaparece.
+ *       columna queda vacía.
  *
  * ── QUÉ FILAS NO ENTRAN (y se listan con el motivo) ──────────────────────────────────────────
  *   - A sin MONTO A PAGAR, o con MONTO A PAGAR mayor que la factura (la retención resta, no suma).
@@ -49,8 +48,8 @@
  *
  * DEPENDE de Pagoslb.gs (formatearNombreHoja_, aNumero_, redondear2_, formatearImporte_,
  * indicesPorHeader_, TIPOS_VALIDABLES, EST_CARGADO),
- * Hojaagrupada.gs (AGRUP_PREFIJO, AGRUP_HEADERS, AGRUP_COL, agrupAnterior_, letraColumna_, PDF_CARPETA_ID),
- * Cancelaciones.gs (estadoCancelaciones_) y PaypalAprobaciones.gs (ampliarFiltro_).
+ * Hojaagrupada.gs (AGRUP_PREFIJO, AGRUP_HEADERS, AGRUP_COL, agrupAnterior_, PDF_CARPETA_ID) y
+ * Cancelaciones.gs (estadoCancelaciones_).
  */
 
 const CG_HEADER_PAGAR = 'MONTO A PAGAR';
@@ -107,25 +106,17 @@ function conMontoAPagar_(fn) {
 }
 
 /**
- * Crea (si hace falta) y llena la columna MONTO A PAGAR. Va como mínimo en la columna 17: la 16 es
- * de APROB. PAYPAL, que se escribe siempre en AGRUP_HEADERS.length + 1 aunque todavía no exista.
- * Las filas tipo A quedan en blanco para cargar; el resto toma el fondo de su fila.
+ * Llena la columna MONTO A PAGAR, que escribirHojaAgrupada_ crea vacía. Las filas tipo A quedan en
+ * blanco para cargar; el resto toma el fondo de su fila. Si la hoja no tiene la columna (agrupada
+ * de la versión anterior), no hace nada.
  */
 function cgEscribirColumnaPagar_(hoja, valores) {
   const ultima = hoja.getLastRow();
-  if (ultima < 2) return;
+  const col = cgColumnaPagar_(hoja);
+  if (ultima < 2 || col < 0) return;
 
-  let col = cgColumnaPagar_(hoja);
-  if (col < 0) col = Math.max(hoja.getLastColumn() + 1, AGRUP_HEADERS.length + 2);
-  if (hoja.getMaxColumns() < col) {
-    hoja.insertColumnsAfter(hoja.getMaxColumns(), col - hoja.getMaxColumns());
-  }
-
-  hoja.getRange(1, col).setValue(CG_HEADER_PAGAR)
-    .setFontWeight('bold').setFontColor('#ffffff')
-    .setBackground('#434343').setHorizontalAlignment('center').setVerticalAlignment('middle')
-    .setNote('Solo tipo A: lo que se transfiere, neto de retenciones.\n' +
-             'Lo usa "Galicia: generar archivo de carga". Las tipo C transfieren el MONTO.');
+  hoja.getRange(1, col).setNote('Solo tipo A: lo que se transfiere, neto de retenciones.\n' +
+    'Lo usa "Galicia: generar archivo de carga". Las tipo C transfieren el MONTO.');
 
   const n = ultima - 1;
   const ids = hoja.getRange(2, AGRUP_COL.IDS, n, 1).getValues();
@@ -139,10 +130,7 @@ function cgEscribirColumnaPagar_(hoja, valores) {
 
   hoja.getRange(2, col, n, 1).setValues(salida).setBackgrounds(fondos)
     .setNumberFormat('#,##0.00').setHorizontalAlignment('right');
-  hoja.getRange(1, col, ultima, 1)
-    .setBorder(true, true, true, true, true, true, '#b7b7b7', SpreadsheetApp.BorderStyle.SOLID);
   hoja.setColumnWidth(col, 120);
-  ampliarFiltro_(hoja, col);
 }
 
 /* ══════════════════ GENERACIÓN DEL ARCHIVO ══════════════════ */
@@ -163,14 +151,10 @@ function generarArchivoGalicia() {
     return;
   }
 
-  // La columna nace al regenerar la agrupada desde el menú. Si la agrupada es anterior a este
-  // archivo, no existe: se crea acá y se avisa dónde quedó, en vez de excluir las A sin explicar.
-  let avisoColumna = '';
   if (cgColumnaPagar_(hoja) < 0) {
-    cgEscribirColumnaPagar_(hoja, {});
-    avisoColumna = '\n\nℹ️ La agrupada no tenía la columna ' + CG_HEADER_PAGAR + ': la acabo de crear en la ' +
-      'columna ' + letraColumna_(cgColumnaPagar_(hoja)) + ', a la derecha de todo. Cargá ahí el neto de ' +
-      'cada fila A y volvé a correr esto.';
+    ui.alert('La agrupada de hoy es de la versión anterior y no tiene la columna ' + CG_HEADER_PAGAR +
+             '. Corré "Actualizar hoja agrupada del día" y cargá el neto de las A en esa columna.');
+    return;
   }
 
   const res = cgFilasParaElBanco_(ss, hoja, hojaDia, nombreDia);
@@ -183,7 +167,7 @@ function generarArchivoGalicia() {
 
   const textoExcluidas = res.excluidas.length === 0 ? '' :
     '\n\n❌ NO ENTRAN (' + res.excluidas.length + '):\n' +
-    res.excluidas.map(e => '• ' + e.benef + ' (' + e.ids + ') — ' + e.motivo).join('\n') + avisoColumna;
+    res.excluidas.map(e => '• ' + e.benef + ' (' + e.ids + ') — ' + e.motivo).join('\n');
 
   if (filas.length === 0) {
     ui.alert('No hay ninguna fila A o C en "' + EST_CARGADO + '" que se pueda cargar al banco.' + textoExcluidas);
