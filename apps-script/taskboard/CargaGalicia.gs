@@ -49,7 +49,7 @@
  *
  * DEPENDE de Pagoslb.gs (formatearNombreHoja_, aNumero_, redondear2_, formatearImporte_,
  * indicesPorHeader_, TIPOS_VALIDABLES, EST_CARGADO),
- * Hojaagrupada.gs (AGRUP_PREFIJO, AGRUP_HEADERS, AGRUP_COL, agrupAnterior_, PDF_CARPETA_ID),
+ * Hojaagrupada.gs (AGRUP_PREFIJO, AGRUP_HEADERS, AGRUP_COL, agrupAnterior_, letraColumna_, PDF_CARPETA_ID),
  * Cancelaciones.gs (estadoCancelaciones_) y PaypalAprobaciones.gs (ampliarFiltro_).
  */
 
@@ -163,6 +163,16 @@ function generarArchivoGalicia() {
     return;
   }
 
+  // La columna nace al regenerar la agrupada desde el menú. Si la agrupada es anterior a este
+  // archivo, no existe: se crea acá y se avisa dónde quedó, en vez de excluir las A sin explicar.
+  let avisoColumna = '';
+  if (cgColumnaPagar_(hoja) < 0) {
+    cgEscribirColumnaPagar_(hoja, {});
+    avisoColumna = '\n\nℹ️ La agrupada no tenía la columna ' + CG_HEADER_PAGAR + ': la acabo de crear en la ' +
+      'columna ' + letraColumna_(cgColumnaPagar_(hoja)) + ', a la derecha de todo. Cargá ahí el neto de ' +
+      'cada fila A y volvé a correr esto.';
+  }
+
   const res = cgFilasParaElBanco_(ss, hoja, hojaDia, nombreDia);
 
   const prop = PropertiesService.getDocumentProperties();
@@ -173,7 +183,7 @@ function generarArchivoGalicia() {
 
   const textoExcluidas = res.excluidas.length === 0 ? '' :
     '\n\n❌ NO ENTRAN (' + res.excluidas.length + '):\n' +
-    res.excluidas.map(e => '• ' + e.benef + ' (' + e.ids + ') — ' + e.motivo).join('\n');
+    res.excluidas.map(e => '• ' + e.benef + ' (' + e.ids + ') — ' + e.motivo).join('\n') + avisoColumna;
 
   if (filas.length === 0) {
     ui.alert('No hay ninguna fila A o C en "' + EST_CARGADO + '" que se pueda cargar al banco.' + textoExcluidas);
