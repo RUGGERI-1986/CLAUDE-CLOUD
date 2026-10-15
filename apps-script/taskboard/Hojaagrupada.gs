@@ -124,6 +124,30 @@ const AGRUP_COL = {
 };
 
 /**
+ * Columnas de UNA hoja agrupada concreta, buscadas por nombre de encabezado. Mismas claves que
+ * AGRUP_COL (1-based; -1 si la hoja no tiene esa columna) más ANCHO.
+ * Lo usa todo lo que lee una agrupada que puede no ser la de hoy recién generada: una de un día
+ * anterior, o la de hoy armada con una versión vieja del script. Leerlas con AGRUP_COL fijo lee
+ * columnas corridas en cuanto el diseño cambia.
+ */
+function colsAgrup_(hoja) {
+  const ancho = Math.max(hoja.getLastColumn(), 1);
+  const hdr = hoja.getRange(1, 1, 1, ancho).getValues()[0]
+    .map(h => String(h == null ? '' : h).trim().toUpperCase());
+  const res = { ANCHO: ancho };
+  Object.keys(AGRUP_COL).forEach(k => {
+    const i = hdr.indexOf(AGRUP_HEADERS[AGRUP_COL[k] - 1].toUpperCase());
+    res[k] = i >= 0 ? i + 1 : -1;
+  });
+  return res;
+}
+
+/** Valor de una fila leída con colsAgrup_. '' si la hoja no tiene esa columna. */
+function valAgrup_(v, C, clave) {
+  return C[clave] > 0 ? v[C[clave] - 1] : '';
+}
+
+/**
  * Tipos que no entran en la hoja agrupada. Vacío: Paypal ya entra, porque las filas sin
  * BENEFICIARIO se agrupan y se muestran por su dato de pago (el mail).
  * Criptomoneda no figura acá porque se excluye antes, en la hoja del día.
@@ -1155,19 +1179,20 @@ function generarHojaAprobacion() {
   const incompletos = [];
 
   if (ultimaFila >= 2) {
-    hojaAgrup.getRange(2, 1, ultimaFila - 1, AGRUP_HEADERS.length).getValues().forEach(v => {
-      if (String(v[AGRUP_COL.IDS - 1] || '').trim() === '') return;
-      if (String(v[AGRUP_COL.ESTADO - 1] || '').trim().toUpperCase() !== EST_CARGADO) return;
+    const C = colsAgrup_(hojaAgrup);
+    hojaAgrup.getRange(2, 1, ultimaFila - 1, C.ANCHO).getValues().forEach(v => {
+      if (String(valAgrup_(v, C, 'IDS') || '').trim() === '') return;
+      if (String(valAgrup_(v, C, 'ESTADO') || '').trim().toUpperCase() !== EST_CARGADO) return;
 
-      const moneda = String(v[AGRUP_COL.MONEDA - 1] || '').trim();
-      const monto = aNumero_(v[AGRUP_COL.MONTO - 1]);
+      const moneda = String(valAgrup_(v, C, 'MONEDA') || '').trim();
+      const monto = aNumero_(valAgrup_(v, C, 'MONTO'));
 
       // Sin moneda o sin monto no hay nada que autorizar: no se sabe cuánto se transfiere ni en
       // qué. La fila no entra, pero se lista al final para que no desaparezca en silencio.
       if (moneda === '' || monto === null || monto === 0) {
         incompletos.push(
-          '• ' + String(v[AGRUP_COL.BENEF - 1] || '(sin beneficiario)') +
-          ' — ' + String(v[AGRUP_COL.IDS - 1]) +
+          '• ' + String(valAgrup_(v, C, 'BENEF') || '(sin beneficiario)') +
+          ' — ' + String(valAgrup_(v, C, 'IDS')) +
           ' — ' + (monto === null || monto === 0 ? 'SIN MONTO' : formatearImporte_(monto)) +
           ' ' + (moneda === '' ? 'SIN MONEDA' : moneda)
         );
@@ -1175,12 +1200,12 @@ function generarHojaAprobacion() {
       }
 
       filas.push([
-        v[AGRUP_COL.TIPO - 1],
-        String(v[AGRUP_COL.IDS - 1] || '').split(',').join('\n'),
-        v[AGRUP_COL.BENEF - 1],
+        valAgrup_(v, C, 'TIPO'),
+        String(valAgrup_(v, C, 'IDS') || '').split(',').join('\n'),
+        valAgrup_(v, C, 'BENEF'),
         monto,
         moneda,
-        String(v[AGRUP_COL.LINKS - 1] || '')
+        String(valAgrup_(v, C, 'LINKS') || '')
       ]);
     });
   }

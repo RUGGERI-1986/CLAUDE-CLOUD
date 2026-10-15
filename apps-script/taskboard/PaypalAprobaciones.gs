@@ -41,7 +41,7 @@
  *   El detalle (quién respondió y qué) va en la nota de la celda COMENTARIO; el fondo de la celda
  *   toma el color del estado.
  *
- * DEPENDE de Hojaagrupada.gs (AGRUP_PREFIJO, AGRUP_HEADERS, AGRUP_COL) y de Pagoslb.gs
+ * DEPENDE de Hojaagrupada.gs (AGRUP_PREFIJO, colsAgrup_, valAgrup_) y de Pagoslb.gs
  * (formatearNombreHoja_).
  */
 
@@ -169,21 +169,24 @@ function refrescarColumnaPaypal_(hoja) {
   const ultima = hoja.getLastRow();
   if (ultima < 2) return [];
 
-  const valores = hoja.getRange(2, 1, ultima - 1, AGRUP_HEADERS.length).getValues();
+  const C = colsAgrup_(hoja);
+  if (C.TIPO < 0 || C.IDS < 0 || C.COMENT < 0) return [];
+  const valores = hoja.getRange(2, 1, ultima - 1, C.ANCHO).getValues();
   // El comprobante es un enlace rich text ("Ver comprobante"): getValues() no trae la URL.
-  const enlaces = hoja.getRange(2, AGRUP_COL.COMPROBANTE, ultima - 1, 1).getRichTextValues();
+  const enlaces = C.COMPROBANTE > 0
+    ? hoja.getRange(2, C.COMPROBANTE, ultima - 1, 1).getRichTextValues() : null;
 
   const cache = {};
   const filas = [];
 
   valores.forEach((v, i) => {
-    if (String(v[AGRUP_COL.TIPO - 1]).trim() !== PP_TIPO) return;
-    const ids = String(v[AGRUP_COL.IDS - 1] || '').split(',').map(s => s.trim()).filter(String);
+    if (String(valAgrup_(v, C, 'TIPO')).trim() !== PP_TIPO) return;
+    const ids = String(valAgrup_(v, C, 'IDS') || '').split(',').map(s => s.trim()).filter(String);
     if (ids.length === 0) return;   // banda de tipo
 
-    const rt = enlaces[i][0];
+    const rt = enlaces ? enlaces[i][0] : null;
     const comprobante = !!((rt && rt.getLinkUrl()) ||
-                           String(v[AGRUP_COL.COMPROBANTE - 1] || '').trim());
+                           String(valAgrup_(v, C, 'COMPROBANTE') || '').trim());
 
     const porId = {};
     ids.forEach(id => {
@@ -196,11 +199,11 @@ function refrescarColumnaPaypal_(hoja) {
       ids: ids,
       comprobante: comprobante,
       porId: porId,
-      comentario: v[AGRUP_COL.COMENT - 1]
+      comentario: valAgrup_(v, C, 'COMENT')
     });
   });
 
-  escribirMarcaPaypal_(hoja, filas);
+  escribirMarcaPaypal_(hoja, filas, C.COMENT);
   return filas;
 }
 
@@ -220,7 +223,7 @@ function estadoConComprobante_(info, comprobante) {
 }
 
 /** Escribe "PAYPAL: <estado>" al final de COMENTARIO, la nota con el detalle y el color. */
-function escribirMarcaPaypal_(hoja, filas) {
+function escribirMarcaPaypal_(hoja, filas, colComent) {
   const etiqueta = e => (PP_GRAVEDAD.find(g => g.estado === e) || { etiqueta: e }).etiqueta;
 
   filas.forEach(f => {
@@ -233,7 +236,7 @@ function escribirMarcaPaypal_(hoja, filas) {
       (f.ids.length > 1 ? id + '\n' : '') + f.porId[id].estado + '\n' + f.porId[id].texto
     ).join('\n\n');
 
-    const celda = hoja.getRange(f.fila, AGRUP_COL.COMENT)
+    const celda = hoja.getRange(f.fila, colComent)
       .setValue(ponerMarcaPaypal_(f.comentario, marca))
       .setNote(nota);
     if (peor) celda.setBackground(peor.fondo);

@@ -18,7 +18,7 @@
  * Los links que no son de Drive o que no se pueden abrir no cortan la descarga: se listan al final.
  *
  * DEPENDE de Pagoslb.gs (formatearNombreHoja_, indicesPorHeader_, extraerIdDeDrive_,
- * TIPOS_VALIDABLES), Hojaagrupada.gs (AGRUP_PREFIJO, AGRUP_HEADERS, AGRUP_COL,
+ * TIPOS_VALIDABLES), Hojaagrupada.gs (AGRUP_PREFIJO, colsAgrup_, valAgrup_,
  * agrupAnterior_, PDF_CARPETA_ID) y Cancelaciones.gs (estadoCancelaciones_).
  */
 
@@ -43,18 +43,19 @@ function descargarFacturasPendientes() {
   const vistos = {};
   let grupos = 0, enBanco = 0, sinLink = 0;
 
-  hoja.getRange(2, 1, hoja.getLastRow() - 1, AGRUP_HEADERS.length).getValues().forEach(v => {
-    const tipo = String(v[AGRUP_COL.TIPO - 1] || '').trim();
-    const ids = String(v[AGRUP_COL.IDS - 1] || '').split(',').map(s => s.trim()).filter(String);
+  const C = colsAgrup_(hoja);
+  hoja.getRange(2, 1, hoja.getLastRow() - 1, C.ANCHO).getValues().forEach(v => {
+    const tipo = String(valAgrup_(v, C, 'TIPO') || '').trim();
+    const ids = String(valAgrup_(v, C, 'IDS') || '').split(',').map(s => s.trim()).filter(String);
     if (ids.length === 0 || TIPOS_VALIDABLES.indexOf(tipo) === -1) return;
-    if (String(v[AGRUP_COL.ESTADO - 1] || '').trim() !== '') return;
+    if (String(valAgrup_(v, C, 'ESTADO') || '').trim() !== '') return;
     if (ids.some(t => anterior.arrastre[t])) { enBanco++; return; }
 
-    const links = String(v[AGRUP_COL.LINKS - 1] || '').split('\n').map(s => s.trim()).filter(String);
+    const links = String(valAgrup_(v, C, 'LINKS') || '').split('\n').map(s => s.trim()).filter(String);
     if (links.length === 0) { sinLink++; return; }
     grupos++;
 
-    const benef = String(v[AGRUP_COL.BENEF - 1] || '').trim();
+    const benef = String(valAgrup_(v, C, 'BENEF') || '').trim();
     links.forEach(l => {
       if (vistos[l]) return;
       vistos[l] = true;

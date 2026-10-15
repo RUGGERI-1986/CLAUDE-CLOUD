@@ -48,7 +48,7 @@
  *
  * DEPENDE de Pagoslb.gs (formatearNombreHoja_, aNumero_, redondear2_, formatearImporte_,
  * indicesPorHeader_, TIPOS_VALIDABLES, EST_CARGADO),
- * Hojaagrupada.gs (AGRUP_PREFIJO, AGRUP_HEADERS, AGRUP_COL, agrupAnterior_, PDF_CARPETA_ID) y
+ * Hojaagrupada.gs (AGRUP_PREFIJO, colsAgrup_, valAgrup_, agrupAnterior_, PDF_CARPETA_ID) y
  * Cancelaciones.gs (estadoCancelaciones_).
  */
 
@@ -85,7 +85,9 @@ function cgLeerMontosAPagar_(hoja) {
   const col = cgColumnaPagar_(hoja);
   if (col < 0) return res;
   const n = hoja.getLastRow() - 1;
-  const ids = hoja.getRange(2, AGRUP_COL.IDS, n, 1).getValues();
+  const C = colsAgrup_(hoja);
+  if (C.IDS < 0) return res;
+  const ids = hoja.getRange(2, C.IDS, n, 1).getValues();
   const vals = hoja.getRange(2, col, n, 1).getValues();
   ids.forEach((v, i) => {
     const k = cgClaveIds_(v[0]);
@@ -119,9 +121,11 @@ function cgEscribirColumnaPagar_(hoja, valores) {
     'Lo usa "Galicia: generar archivo de carga". Las tipo C transfieren el MONTO.');
 
   const n = ultima - 1;
-  const ids = hoja.getRange(2, AGRUP_COL.IDS, n, 1).getValues();
-  const tipos = hoja.getRange(2, AGRUP_COL.TIPO, n, 1).getValues();
-  const fondos = hoja.getRange(2, AGRUP_COL.COMPROBANTE, n, 1).getBackgrounds();
+  const C = colsAgrup_(hoja);
+  if (C.IDS < 0 || C.TIPO < 0) return;
+  const ids = hoja.getRange(2, C.IDS, n, 1).getValues();
+  const tipos = hoja.getRange(2, C.TIPO, n, 1).getValues();
+  const fondos = hoja.getRange(2, C.TIPO, n, 1).getBackgrounds();
   const salida = ids.map((v, i) => {
     const k = cgClaveIds_(v[0]);
     if (k !== '' && String(tipos[i][0]).trim() === CG_TIPO_CON_RETENCION) fondos[i][0] = '#ffffff';
@@ -242,18 +246,18 @@ function cgFilasParaElBanco_(ss, hoja, hojaDia, nombreDia) {
   const anterior = agrupAnterior_(ss, nombreDia, canc);
   const colPagar = cgColumnaPagar_(hoja);
 
-  const ancho = Math.max(hoja.getLastColumn(), AGRUP_HEADERS.length);
-  const valores = hoja.getRange(2, 1, hoja.getLastRow() - 1, ancho).getValues();
+  const C = colsAgrup_(hoja);
+  const valores = hoja.getRange(2, 1, hoja.getLastRow() - 1, C.ANCHO).getValues();
   const ok = [], excluidas = [];
 
   valores.forEach(v => {
-    const tipo = String(v[AGRUP_COL.TIPO - 1] || '').trim();
-    const ids = String(v[AGRUP_COL.IDS - 1] || '').split(',').map(s => s.trim()).filter(String);
+    const tipo = String(valAgrup_(v, C, 'TIPO') || '').trim();
+    const ids = String(valAgrup_(v, C, 'IDS') || '').split(',').map(s => s.trim()).filter(String);
     if (ids.length === 0) return;                                          // banda o resumen
     if (TIPOS_VALIDABLES.indexOf(tipo) === -1) return;
-    if (String(v[AGRUP_COL.ESTADO - 1] || '').trim().toUpperCase() !== EST_CARGADO) return;
+    if (String(valAgrup_(v, C, 'ESTADO') || '').trim().toUpperCase() !== EST_CARGADO) return;
 
-    const benef = String(v[AGRUP_COL.BENEF - 1] || '(sin beneficiario)');
+    const benef = String(valAgrup_(v, C, 'BENEF') || '(sin beneficiario)');
     const idsTxt = ids.join(', ');
     const fuera = motivo => excluidas.push({ benef: benef, ids: idsTxt, motivo: motivo });
 
@@ -268,10 +272,10 @@ function cgFilasParaElBanco_(ss, hoja, hojaDia, nombreDia) {
       return;
     }
 
-    const moneda = String(v[AGRUP_COL.MONEDA - 1] || '').trim().toUpperCase();
+    const moneda = String(valAgrup_(v, C, 'MONEDA') || '').trim().toUpperCase();
     if (moneda !== CG_MONEDA) { fuera('moneda ' + (moneda || 'vacía') + ', Galicia transfiere en ' + CG_MONEDA); return; }
 
-    const montoFactura = aNumero_(v[AGRUP_COL.MONTO - 1]);
+    const montoFactura = aNumero_(valAgrup_(v, C, 'MONTO'));
     if (montoFactura === null || montoFactura <= 0) { fuera('sin monto de factura verificado'); return; }
 
     let monto = montoFactura;

@@ -939,7 +939,7 @@ function onOpen() {
     .addItem('Generar hoja del día', 'menuGenerarHojaDia')
     .addItem('Actualizar hoja del día', 'menuActualizarHojaDia')
     .addItem('Arrastrar montos del día anterior', 'arrastrarMontoValidadoHoy')
-    .addItem('Validar beneficiario y monto (filas seleccionadas)', 'validarSeleccion')
+    .addItem('Validar beneficiario y monto (filas seleccionadas)', 'abrirLectorFacturas')
     .addItem('[DIAGNÓSTICO] Ver texto OCR de fila', 'diagnosticoOcrFila')
     .addToUi();
 
@@ -948,6 +948,7 @@ function onOpen() {
     .addItem('Actualizar hoja agrupada del día', 'menuActualizarAgrupada')
     .addSeparator()
     .addItem('Descargar facturas A y C sin estado (ZIP)', 'descargarFacturasPendientes')
+    .addItem('Completar MONTO A PAGAR con órdenes de Colppy', 'abrirOrdenesColppy')
     .addItem('Galicia: generar archivo de carga al banco', 'generarArchivoGalicia')
     .addItem('Generar hoja de APROBACIÓN', 'generarHojaAprobacion')
     .addItem('PayPal: revisar aprobaciones y confirmar abonados', 'revisarAprobacionesPaypal')
@@ -1308,16 +1309,24 @@ function anclasDeGrupo_(task, clave, ctx) {
 const COLOR_VALID_MISMATCH = '#f4cccc'; // rojo claro: no coincide
 const COLOR_VALID_REVISION = '#ffe599'; // amarillo: revisión manual
 
+/**
+ * Versión anterior: lee las facturas con el OCR de Drive. El menú ahora abre el lector del
+ * navegador (LectorFacturas.gs), que usa esta misma validación con el texto real del PDF.
+ */
 function validarSeleccion() {
   const hoja = SpreadsheetApp.getActiveSheet();
-  const ui = SpreadsheetApp.getUi();
   const rango = hoja.getActiveRange();
-  const filaInicio = rango.getRow();
-  const cantFilas = rango.getNumRows();
+  SpreadsheetApp.getUi().alert(validarFilas_(hoja, rango.getRow(), rango.getNumRows(), {}));
+}
 
+/**
+ * Valida beneficiario y monto de las filas [filaInicio, filaInicio + cantFilas) y escribe notas,
+ * colores y MONTO FACTURA. Devuelve el resumen como texto.
+ * cache: id de Drive → { texto }. Lo que no está en el cache se lee con el OCR de Drive.
+ */
+function validarFilas_(hoja, filaInicio, cantFilas, cache) {
   const statusPorTask = mapaStatusPorTask_();
   const ctx = contextoAgrupacion_(hoja, statusPorTask);
-  const cache = {};
 
   let benOk = 0, benMismatch = 0, benRevision = 0;
   let monOk = 0, monMismatch = 0, monRevision = 0;
@@ -1373,7 +1382,7 @@ function validarSeleccion() {
     }
   }
 
-  ui.alert(
+  return (
     'Validación completa.\n\n' +
     'BENEFICIARIO\n' +
     '  ✅ Coinciden: ' + benOk + '\n' +
@@ -1831,8 +1840,21 @@ function ratioEsAlicuotaIva_(montoHoja, montoFactura) {
   return null;
 }
 
+/**
+ * Línea que agrega el lector del navegador (LectorFacturas.gs) cuando la factura trae el QR de
+ * ARCA: "[QR ARCA] importe: 120000.00". Es el importe total que la factura informó a ARCA, así
+ * que manda sobre cualquier rótulo leído del texto.
+ */
+const RE_QR_ARCA_IMPORTE = /\[QR ARCA\] importe: ([\d.]+)/;
+
 function parsearImporteFactura_(texto) {
   let total = null, rotulo = null;
+
+  const qr = String(texto).match(RE_QR_ARCA_IMPORTE);
+  if (qr) {
+    total = Number(qr[1]);
+    rotulo = 'QR de ARCA';
+  }
 
   for (let i = 0; i < ROTULOS_TOTAL.length && total === null; i++) {
     total = primerImporte_(texto, ROTULOS_TOTAL[i].re);
