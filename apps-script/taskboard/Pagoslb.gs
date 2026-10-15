@@ -938,6 +938,7 @@ function onOpen() {
   ui.createMenu('Pagos LB')
     .addItem('Generar hoja del día', 'menuGenerarHojaDia')
     .addItem('Actualizar hoja del día', 'menuActualizarHojaDia')
+    .addItem('Arrastrar montos del día anterior', 'arrastrarMontoValidadoHoy')
     .addItem('Validar beneficiario y monto (filas seleccionadas)', 'validarSeleccion')
     .addItem('[DIAGNÓSTICO] Ver texto OCR de fila', 'diagnosticoOcrFila')
     .addToUi();
@@ -946,6 +947,7 @@ function onOpen() {
     .addItem('Generar hoja agrupada del día', 'menuGenerarAgrupada')
     .addItem('Actualizar hoja agrupada del día', 'menuActualizarAgrupada')
     .addSeparator()
+    .addItem('Descargar facturas A y C sin estado (ZIP)', 'descargarFacturasPendientes')
     .addItem('Galicia: generar archivo de carga al banco', 'generarArchivoGalicia')
     .addItem('Generar hoja de APROBACIÓN', 'generarHojaAprobacion')
     .addItem('PayPal: revisar aprobaciones y confirmar abonados', 'revisarAprobacionesPaypal')
