@@ -223,6 +223,10 @@ function cascadaFiltro_(filtro, desde) {
     aplicarOpciones_(filtro.getRange('C7'), [], aux.getRange('B2:B5'));
     aplicarOpciones_(filtro.getRange('C8'), [], aux.getRange('C2:C300'));
     aplicarOpciones_(filtro.getRange('C9'), [], aux.getRange('D2:D300'));
+    filtro.getRange('C10').setDataValidation(SpreadsheetApp.newDataValidation()
+      .requireNumberBetween(1, CONFIG_DECISION.MAX_LINKS).setAllowInvalid(false).setHelpText('Un número entre 1 y 50').build());
+    filtro.getRange('C11').setDataValidation(SpreadsheetApp.newDataValidation()
+      .requireNumberGreaterThanOrEqualTo(0).setAllowInvalid(false).setHelpText('Opcional: tráfico orgánico mínimo').build());
     return;
   }
 
@@ -257,6 +261,30 @@ function cascadaFiltro_(filtro, desde) {
     }
     aplicarOpciones_(filtro.getRange('C9'), idiomas, aux.getRange('D2:D300'));
   }
+  if (desde <= 10) {
+    // Filas de Condiciones que corresponden a proyecto + tipo + país (si ninguna nombra el país, proyecto + tipo).
+    const tipo = filtro.getRange('C7').getValue();
+    const pais = filtro.getRange('C8').getValue();
+    const deTipo = delProyecto.filter(function (r) { return r.tipo === tipo; });
+    const dePais = deTipo.filter(function (r) { return r.paises.indexOf(pais) !== -1; });
+    const usar = dePais.length ? dePais : deTipo;
+    const pendiente = usar.reduce(function (s, r) { return s + r.cantidad; }, 0);
+    const trafMin = usar.reduce(function (m, r) { return Math.max(m, r.trafico); }, 0);
+
+    // C10: de 1 hasta lo pendiente (máx. 50). Sin pendiente, queda 1 y se avisa.
+    const tope = pendiente > 0 ? Math.min(pendiente, CONFIG_DECISION.MAX_LINKS) : CONFIG_DECISION.MAX_LINKS;
+    filtro.getRange('C10').setDataValidation(SpreadsheetApp.newDataValidation()
+      .requireNumberBetween(1, tope).setAllowInvalid(false)
+      .setHelpText('Entre 1 y ' + tope + (pendiente > 0 ? ' (pendiente en Condiciones: ' + pendiente + ')' : '')).build())
+      .setValue(pendiente > 0 ? tope : 1);
+    if (pendiente <= 0) ss.toast('Condiciones no tiene cantidad pendiente para ' + tipo + ' / ' + pais + '.', 'FILTRO', 6);
+
+    // C11: no menos que el tráfico mínimo del proyecto; arranca con ese valor.
+    filtro.getRange('C11').setDataValidation(SpreadsheetApp.newDataValidation()
+      .requireNumberGreaterThanOrEqualTo(trafMin).setAllowInvalid(false)
+      .setHelpText('Mínimo del proyecto en Condiciones: ' + trafMin).build())
+      .setValue(trafMin > 0 ? trafMin : '');
+  }
 }
 
 function aplicarOpciones_(celda, opciones, rangoOriginal) {
@@ -280,7 +308,8 @@ function leerCondicionesFiltro_(ss) {
       idioma: String(f[8]).trim(),
       paises: String(f[9]).split(',').map(function (p) { return p.trim(); }).filter(String),
       tipo: m ? 'Intervalo métrica ' + m[1] : '',
-      cantidad: m ? Number(m[2]) : 0
+      cantidad: m ? Number(m[2]) : 0,
+      trafico: typeof f[12] === 'number' ? f[12] : (Number(String(f[12]).replace(/\./g, '').replace(',', '.')) || 0)
     };
   }).filter(function (r) { return r.proyecto; });
 }
