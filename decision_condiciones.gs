@@ -37,6 +37,7 @@ function setupDecision() {
   const datos = obtenerOCrearHojaDecision_(ss, CONFIG_DECISION.HOJA_DATOS);
   const vista = obtenerOCrearHojaDecision_(ss, CONFIG_DECISION.HOJA_VISTA);
   armarDatos_(datos, columnas);
+  SpreadsheetApp.flush();
   armarVista_(vista);
   datos.hideSheet();
   ss.setActiveSheet(vista);
@@ -318,6 +319,7 @@ function alternarProyecto_(sh) {
 
 /** Deja en C7 sólo los proyectos del cliente elegido en C5 (todos si es "Todos"). */
 function actualizarListaProyectos_(vista) {
+  SpreadsheetApp.flush();   // las fórmulas de Decisión_Datos tienen que estar calculadas antes de leerlas
   const datos = vista.getParent().getSheetByName(CONFIG_DECISION.HOJA_DATOS);
   const cliente = vista.getRange('C5').getValue();
   const filas = datos.getRange(2, 1, datos.getLastRow() - 1, 2).getValues();
