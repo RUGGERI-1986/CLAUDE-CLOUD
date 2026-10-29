@@ -185,12 +185,7 @@ function crearMenuDecision() {
 function alEditarDecision(e) {
   if (!e || !e.range) return;
   const sh = e.range.getSheet();
-  if (sh.getName() === CONFIG_DECISION.HOJA_FILTRO) {
-    const f = e.range.getRow();
-    // C5 Proyecto, C7 Tipo, C8 País alteran los desplegables de abajo. C6 (mes) no depende de nada.
-    if (e.range.getColumn() === 3 && (f === 5 || f === 7 || f === 8)) cascadaFiltro_(sh, f === 5 ? 7 : f + 1);
-    return;
-  }
+  // Las ediciones en FILTRO las atiende onEdit() de Autorrelleno.gs, que llama a cascadaFiltro_.
   if (sh.getName() !== CONFIG_DECISION.HOJA_VISTA) return;
   if (e.range.getRow() !== 4 || e.range.getColumn() !== 3) return;
   actualizarListaProyectos_(sh);
@@ -202,7 +197,7 @@ function alEditarDecision(e) {
 
 /** Ejecutar una vez a mano para aplicar la cascada con lo que hoy hay en FILTRO. */
 function activarCascadaFiltro() {
-  cascadaFiltro_(SpreadsheetApp.getActive().getSheetByName(CONFIG_DECISION.HOJA_FILTRO), 7);
+  cascadaFiltro_(SpreadsheetApp.getActive().getSheetByName(CONFIG_DECISION.HOJA_FILTRO), 7, false);
 }
 
 /**
@@ -211,15 +206,17 @@ function activarCascadaFiltro() {
  * C8 País: países objetivo del proyecto en ESE intervalo.
  * C9 Idioma: idioma del cliente + idiomas con negociación en BASE para ESE país.
  * Si el valor actual ya no está entre las opciones, pasa a la primera opción.
+ * C10 y C11: `reiniciar` = true los vuelve a su valor por defecto; false conserva lo que haya
+ * mientras sea válido (es lo que corresponde después del autorrelleno, que ya los completó).
  */
-function cascadaFiltro_(filtro, desde) {
+function cascadaFiltro_(filtro, desde, reiniciar) {
   const ss = filtro.getParent();
   const aux = ss.getSheetByName(CONFIG_DECISION.HOJA_AUXILIAR);
   const filas = leerCondicionesFiltro_(ss);
   const proyecto = String(filtro.getRange('C5').getValue()).trim();
   const delProyecto = filas.filter(function (r) { return r.proyecto === proyecto; });
   if (!delProyecto.length) {
-    ss.toast('"' + proyecto + '" no está en Condiciones: los desplegables quedan sin filtrar.', 'FILTRO', 6);
+    if (proyecto) ss.toast('"' + proyecto + '" no está en Condiciones: los desplegables quedan sin filtrar.', 'FILTRO', 6);
     aplicarOpciones_(filtro.getRange('C7'), [], aux.getRange('B2:B5'));
     aplicarOpciones_(filtro.getRange('C8'), [], aux.getRange('C2:C300'));
     aplicarOpciones_(filtro.getRange('C9'), [], aux.getRange('D2:D300'));
@@ -249,16 +246,18 @@ function cascadaFiltro_(filtro, desde) {
   }
   if (desde <= 9) {
     const pais = filtro.getRange('C8').getValue();
-    const idiomas = [];
     const cliente = delProyecto.map(function (r) { return r.idioma; }).filter(String)[0];
-    if (cliente) idiomas.push(cliente);
+    const conMedios = [];
     const base = ss.getSheetByName(CONFIG_DECISION.HOJA_BASE);
     const n = base.getLastRow() - 1;
     if (n > 0) {
       base.getRange(2, 13, n, 6).getValues().forEach(function (b) { // M país, N idioma, ..., Q deal_type
-        if (b[0] === pais && b[1] && b[4] && idiomas.indexOf(b[1]) === -1) idiomas.push(b[1]);
+        if (b[0] === pais && b[1] && b[4] && conMedios.indexOf(b[1]) === -1) conMedios.push(b[1]);
       });
     }
+    // Primero los idiomas con negociación (el del cliente antes, si está); el del cliente sin medios queda al final.
+    const idiomas = conMedios.slice().sort(function (a, b) { return (b === cliente) - (a === cliente); });
+    if (cliente && idiomas.indexOf(cliente) === -1) idiomas.push(cliente);
     aplicarOpciones_(filtro.getRange('C9'), idiomas, aux.getRange('D2:D300'));
   }
   if (desde <= 10) {
@@ -273,17 +272,21 @@ function cascadaFiltro_(filtro, desde) {
 
     // C10: de 1 hasta lo pendiente (máx. 50). Sin pendiente, queda 1 y se avisa.
     const tope = pendiente > 0 ? Math.min(pendiente, CONFIG_DECISION.MAX_LINKS) : CONFIG_DECISION.MAX_LINKS;
-    filtro.getRange('C10').setDataValidation(SpreadsheetApp.newDataValidation()
+    const c10 = filtro.getRange('C10');
+    const v10 = Number(c10.getValue());
+    c10.setDataValidation(SpreadsheetApp.newDataValidation()
       .requireNumberBetween(1, tope).setAllowInvalid(false)
-      .setHelpText('Entre 1 y ' + tope + (pendiente > 0 ? ' (pendiente en Condiciones: ' + pendiente + ')' : '')).build())
-      .setValue(pendiente > 0 ? tope : 1);
+      .setHelpText('Entre 1 y ' + tope + (pendiente > 0 ? ' (pendiente en Condiciones: ' + pendiente + ')' : '')).build());
+    if (reiniciar || !(v10 >= 1 && v10 <= tope)) c10.setValue(pendiente > 0 ? tope : 1);
     if (pendiente <= 0) ss.toast('Condiciones no tiene cantidad pendiente para ' + tipo + ' / ' + pais + '.', 'FILTRO', 6);
 
-    // C11: no menos que el tráfico mínimo del proyecto; arranca con ese valor.
-    filtro.getRange('C11').setDataValidation(SpreadsheetApp.newDataValidation()
+    // C11: no menos que el tráfico mínimo del proyecto.
+    const c11 = filtro.getRange('C11');
+    const v11 = Number(c11.getValue());
+    c11.setDataValidation(SpreadsheetApp.newDataValidation()
       .requireNumberGreaterThanOrEqualTo(trafMin).setAllowInvalid(false)
-      .setHelpText('Mínimo del proyecto en Condiciones: ' + trafMin).build())
-      .setValue(trafMin > 0 ? trafMin : '');
+      .setHelpText('Mínimo del proyecto en Condiciones: ' + trafMin).build());
+    if (reiniciar || (trafMin > 0 && !(v11 >= trafMin))) c11.setValue(trafMin > 0 ? trafMin : '');
   }
 }
 
@@ -413,7 +416,9 @@ function enviarAFiltro() {
   if (idioma) filtro.getRange('C9').setValue(idioma);
   filtro.getRange('C10').setValue(links);
   filtro.getRange('C11').setValue(trafico > 0 ? trafico : '');
-  cascadaFiltro_(filtro, 7);
+  filtro.getRange('D8').setValue('Cargado desde la hoja Decisión');
+  filtro.getRange('D9').setValue('');
+  cascadaFiltro_(filtro, 7, false);
   ss.setActiveSheet(filtro);
   ss.toast(proyecto + ' · ' + tipo + ' · ' + pais + ' · ' + links + ' links' +
     (cantidad > links ? ' (pedían ' + cantidad + ', FILTRO admite ' + CONFIG_DECISION.MAX_LINKS + ')' : ''),
