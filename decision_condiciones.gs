@@ -83,11 +83,57 @@ function setupTriggers() {
 }
 
 /* ------------------------------------------------------------------ */
+/* FÓRMULAS: separador de argumentos según la planilla (',' o ';')     */
+/* ------------------------------------------------------------------ */
+
+const SEPARADOR_DECISION = { puntoYComa: false };
+
+/**
+ * Escribe una fórmula escrita con ','. Si la planilla usa ';' (configuración regional) y la fórmula da
+ * "#ERROR!", la reescribe con ';' y recuerda el cambio para las siguientes.
+ */
+function escribirFormula_(celda, formula) {
+  if (!SEPARADOR_DECISION.puntoYComa) {
+    celda.setFormula(formula);
+    SpreadsheetApp.flush();
+    if (String(celda.getDisplayValue()).indexOf('#ERROR!') !== 0) return;
+    celda.setFormula(formulaConPuntoYComa_(formula));
+    SpreadsheetApp.flush();
+    if (String(celda.getDisplayValue()).indexOf('#ERROR!') === 0) {
+      celda.setFormula(formula);   // tampoco con ';': vuelvo a la original y dejo que el error se vea
+      throw new Error('La fórmula de ' + celda.getA1Notation() + ' da #ERROR! con "," y con ";": ' + formula);
+    }
+    SEPARADOR_DECISION.puntoYComa = true;
+    celda.getParent().toast('La planilla usa ";" en las fórmulas: las escribo así.', 'Decisión', 5);
+    return;
+  }
+  celda.setFormula(formulaConPuntoYComa_(formula));
+}
+
+/** Cambia ',' por ';' entre argumentos de funciones (no dentro de textos "..." ni entre llaves {}). */
+function formulaConPuntoYComa_(f) {
+  let out = '', enTexto = false;
+  const pila = [];
+  for (let i = 0; i < f.length; i++) {
+    const ch = f[i];
+    if (ch === '"') enTexto = !enTexto;
+    else if (!enTexto) {
+      if (ch === '(' || ch === '{') pila.push(ch);
+      else if (ch === ')' || ch === '}') pila.pop();
+      else if (ch === ',' && pila[pila.length - 1] !== '{') { out += ';'; continue; }
+    }
+    out += ch;
+  }
+  return out;
+}
+
+/* ------------------------------------------------------------------ */
 /* HOJA OCULTA: DATOS                                                  */
 /* ------------------------------------------------------------------ */
 
 function armarDatos_(sh, columnas) {
   sh.clear();
+  const fx = function (a1, f) { escribirFormula_(sh.getRange(a1), f); };
   const C = "'" + CONFIG_DECISION.HOJA_CONDICIONES + "'!";
   const rango = function (i) { const l = letraColumna_(i); return C + l + '2:' + l; };
   const sinProyecto = rango(columnas.proyecto) + '=""';
@@ -96,24 +142,24 @@ function armarDatos_(sh, columnas) {
   sh.getRange('A1:G1').setValues([[
     'Cliente', 'Proyecto', 'Intervalo', 'Cantidad', 'Tráfico mínimo', 'Países', 'Idioma'
   ]]);
-  sh.getRange('A2').setFormula('=ARRAYFORMULA(IF(' + sinProyecto + ',"",' + rango(columnas.cliente) + '))');
-  sh.getRange('B2').setFormula('=ARRAYFORMULA(IF(' + sinProyecto + ',"",' + rango(columnas.proyecto) + '))');
-  sh.getRange('C2').setFormula(
+  fx('A2', '=ARRAYFORMULA(IF(' + sinProyecto + ',"",' + rango(columnas.cliente) + '))');
+  fx('B2', '=ARRAYFORMULA(IF(' + sinProyecto + ',"",' + rango(columnas.proyecto) + '))');
+  fx('C2', 
     '=ARRAYFORMULA(IF(' + sinProyecto + ',"",IFERROR(REGEXEXTRACT(' + L + '&"","(\\d+-\\d+)"),"")))');
-  sh.getRange('D2').setFormula(
+  fx('D2', 
     '=ARRAYFORMULA(IF(' + sinProyecto + ',"",IFERROR(VALUE(REGEXEXTRACT(' + L + '&"","->\\s*(\\d+)")),0)))');
-  sh.getRange('E2').setFormula(columnas.trafico < 0
+  fx('E2', columnas.trafico < 0
     ? '=ARRAYFORMULA(IF(' + sinProyecto + ',"",0))'
     : '=ARRAYFORMULA(IF(' + sinProyecto + ',"",IFERROR(VALUE(' + rango(columnas.trafico) + '),0)))');
-  sh.getRange('F2').setFormula('=ARRAYFORMULA(IF(' + sinProyecto + ',"",' + rango(columnas.paises) + '))');
-  sh.getRange('G2').setFormula('=ARRAYFORMULA(IF(' + sinProyecto + ',"",' + rango(columnas.idioma) + '))');
+  fx('F2', '=ARRAYFORMULA(IF(' + sinProyecto + ',"",' + rango(columnas.paises) + '))');
+  fx('G2', '=ARRAYFORMULA(IF(' + sinProyecto + ',"",' + rango(columnas.idioma) + '))');
 
   // Listas para los desplegables (los proyectos los arma el script, según el cliente)
   const todos = '"' + CONFIG_DECISION.TODOS + '"';
   sh.getRange('I1:K1').setValues([['Lista clientes', 'Lista intervalos', 'Lista países']]);
-  sh.getRange('I2').setFormula('={' + todos + ';SORT(UNIQUE(FILTER(A2:A,A2:A<>"")))}');
-  sh.getRange('J2').setFormula('={' + todos + ';SORT(UNIQUE(FILTER(C2:C,C2:C<>"")))}');
-  sh.getRange('K2').setFormula(
+  fx('I2', '={' + todos + ';SORT(UNIQUE(FILTER(A2:A,A2:A<>"")))}');
+  fx('J2', '={' + todos + ';SORT(UNIQUE(FILTER(C2:C,C2:C<>"")))}');
+  fx('K2', 
     '=ARRAYFORMULA({' + todos + ';SORT(UNIQUE(FILTER(TRIM(FLATTEN(SPLIT(TEXTJOIN(",",TRUE,F2:F),","))),' +
     'TRIM(FLATTEN(SPLIT(TEXTJOIN(",",TRUE,F2:F),",")))<>"")))})');
   sh.setFrozenRows(1);
@@ -199,21 +245,19 @@ function armarVista_(sh) {
 
   // Resumen (panel gris)
   sh.getRange('I5:I8').setValues([['Combinaciones'], ['Proyectos distintos'], ['Clientes'], ['Links por conseguir']]);
-  sh.getRange('J5:J8').setFormulas([
-    ['=COUNTIF(B' + ini + ':B,"?*")'],
-    ['=IFERROR(COUNTUNIQUE(C' + ini + ':C),0)'],
-    ['=IFERROR(COUNTUNIQUE(B' + ini + ':B),0)'],
-    ['=SUM(E' + ini + ':E)']
-  ]);
+  [['J5', '=COUNTIF(B' + ini + ':B,"?*")'],
+    ['J6', '=IFERROR(COUNTUNIQUE(C' + ini + ':C),0)'],
+    ['J7', '=IFERROR(COUNTUNIQUE(B' + ini + ':B),0)'],
+    ['J8', '=SUM(E' + ini + ':E)']].forEach(function (x) { escribirFormula_(sh.getRange(x[0]), x[1]); });
   sh.getRange('I5:J8').setBackground(PANEL);
   sh.getRange('J5:J8').setFontSize(12).setFontWeight('bold').setHorizontalAlignment('right');
 
   // Mensaje de estado
   sh.getRange('B13:J13').merge().setBackground(VERDE_SUAVE);
-  sh.getRange('B13').setFormula(
+  escribirFormula_(sh.getRange('B13'),
     '=IF(B' + ini + '="","Sin resultados con estos filtros. Aflojá alguno (Cantidad mínima 0, o Todos).",' +
-    'J5&" combinaciones de "&J6&" proyectos · "&J8&" links por conseguir")')
-    .setFontSize(11).setFontWeight('bold').setWrap(true);
+    'J5&" combinaciones de "&J6&" proyectos · "&J8&" links por conseguir")');
+  sh.getRange('B13').setFontSize(11).setFontWeight('bold').setWrap(true);
 
   // Resultados
   sh.getRange('B14:G14').merge();
@@ -226,14 +270,14 @@ function armarVista_(sh) {
   sh.getRange('D' + hdr + ':F' + (ini + nRes)).setHorizontalAlignment('center');
   sh.getRange('E' + ini + ':F' + (ini + nRes)).setNumberFormat('#,##0');
   sh.getRange('A' + ini + ':A' + (ini + nRes)).setFontSize(9).setFontColor(SUAVE);
-  sh.getRange('A' + ini).setFormula('=ARRAYFORMULA(IF(B' + ini + ':B="","",ROW(B' + ini + ':B)-' + (ini - 1) + '))');
+  escribirFormula_(sh.getRange('A' + ini), '=ARRAYFORMULA(IF(B' + ini + ':B="","",ROW(B' + ini + ':B)-' + (ini - 1) + '))');
 
   const cond = function (celda, col) {
     return '((($C$' + celda + '="' + T + '")+(' + D + col + '2:' + col + '=$C$' + celda + '))>0)';
   };
   const proyectos = '((($C$6="' + TP + '")+REGEXMATCH(' + D + 'B2:B&"","^("&SUBSTITUTE(SUBSTITUTE($C$6,".","\\."),", ","|")&")$"))>0)';
   const pais = '((($C$9="' + T + '")+REGEXMATCH(' + D + 'F2:F&"","(^|,)\\s*"&$C$9&"\\s*(,|$)"))>0)';
-  sh.getRange(ini, 2).setFormula(
+  escribirFormula_(sh.getRange(ini, 2),
     '=IFERROR(SORT(FILTER(' + D + 'A2:F,' + D + 'B2:B<>"",' +
     cond(5, 'A') + ',' + proyectos + ',' + cond(8, 'C') + ',' + pais + ',' +
     D + 'D2:D>=N($C$10),' + D + 'E2:E>=N($C$11)),4,FALSE,1,TRUE,2,TRUE),"")');
@@ -242,7 +286,7 @@ function armarVista_(sh) {
   sh.setConditionalFormatRules([
     SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied('=$B$' + ini + '=""')
       .setBackground(ROJO_SUAVE).setRanges([sh.getRange('B13:J13')]).build(),
-    SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied('=AND($B' + ini + '<>"",ISEVEN(ROW()))')
+    SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied('=($B' + ini + '<>"")*ISEVEN(ROW())')
       .setBackground('#F4F7FB').setRanges([sh.getRange(ini, 1, nRes, 7)]).build()
   ]);
 
@@ -325,7 +369,7 @@ function actualizarListaProyectos_(vista) {
   const filas = datos.getRange(2, 1, datos.getLastRow() - 1, 2).getValues();
   const proyectos = [];
   filas.forEach(function (f) {
-    if (f[1] && (cliente === CONFIG_DECISION.TODOS || f[0] === cliente) && proyectos.indexOf(f[1]) === -1) {
+    if (f[1] && String(f[1]).charAt(0) !== '#' && (cliente === CONFIG_DECISION.TODOS || f[0] === cliente) && proyectos.indexOf(f[1]) === -1) {
       proyectos.push(f[1]);
     }
   });
