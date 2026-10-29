@@ -223,9 +223,9 @@ function armarVista_(sh) {
   sh.getRange('C5').setValue(T);
   sh.getRange('C6:G6').merge();
   sh.getRange('C6').setValue(TP);
-  sh.getRange('C7:G7').merge();
-  sh.getRange('C7').setValue('▶  ELEGIR PROYECTOS   (hacé clic acá)')
-    .setNote('Hacé clic en esta celda para abrir la lista de proyectos con casillas y buscador.');
+  sh.getRange('C7').insertCheckboxes();
+  sh.getRange('D7:G7').merge();
+  sh.getRange('D7').setValue('◀  Tildá la casilla para elegir proyectos (se abre una lista con buscador)');
   sh.getRange('C8').setValue(T);
   sh.getRange('C9').setValue(T);
   sh.getRange('C10').setValue(1);
@@ -234,8 +234,9 @@ function armarVista_(sh) {
     sh.getRange(a[0]).setBackground(AZUL).setFontSize(11).setFontWeight('bold').setHorizontalAlignment('left')
       .setBorder(true, true, true, true, false, false, BORDE, SpreadsheetApp.BorderStyle.SOLID);
   });
-  sh.getRange('C7:G7').setBackground('#2E6FDE').setFontColor('#FFFFFF').setFontSize(11).setFontWeight('bold').setHorizontalAlignment('center')
+  sh.getRange('C7').setBackground('#2E6FDE').setHorizontalAlignment('center')
     .setBorder(true, true, true, true, false, false, NAVY, SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+  sh.getRange('D7:G7').setFontColor('#2E6FDE').setFontSize(11).setFontWeight('bold').setHorizontalAlignment('left');
   sh.getRange('C6:G6').setBackground(AZUL_SUAVE).setFontSize(11).setFontWeight('bold').setWrap(true)
     .setBorder(true, true, true, true, false, false, BORDE, SpreadsheetApp.BorderStyle.SOLID);
 
@@ -319,31 +320,28 @@ function crearMenuDecision() {
 }
 
 /**
- * Hoja Decisión: al cambiar Cliente (C5) se limpia la selección de proyectos (C6).
+ * Hoja Decisión:
+ *  - C5 (Cliente): al cambiarlo se limpia la selección de proyectos (C6).
+ *  - C7 (casilla): al tildarla se abre el panel de proyectos y la casilla vuelve a quedar vacía.
  * Las ediciones en FILTRO las atiende onEdit() de Autorrelleno.gs, que llama a cascadaFiltro_.
  */
 function alEditarDecision(e) {
   if (!e || !e.range) return;
   const sh = e.range.getSheet();
-  if (sh.getName() !== CONFIG_DECISION.HOJA_VISTA) return;
-  if (e.range.getColumn() === 3 && e.range.getRow() === 5) {
+  if (sh.getName() !== CONFIG_DECISION.HOJA_VISTA || e.range.getColumn() !== 3) return;
+  const fila = e.range.getRow();
+  if (fila === 5) {
     sh.getRange('C6').setValue(CONFIG_DECISION.TODOS_PROYECTOS);
-  }
-}
-
-/**
- * La celda C7 de "Decisión" funciona como botón: al seleccionarla se abre el panel de proyectos.
- * Es un activador simple (no hay que instalar nada). Si por algún motivo no abre, usar el menú
- * Decisión → Elegir proyectos…
- */
-function onSelectionChange(e) {
-  try {
-    const r = e && e.range;
-    if (!r || r.getSheet().getName() !== CONFIG_DECISION.HOJA_VISTA) return;
-    if (r.getRow() !== 7 || r.getColumn() !== 3 || r.getNumRows() !== 1) return;
-    abrirSelectorProyectos();
-  } catch (err) {
-    console.error(new Date(), 'onSelectionChange', err);
+  } else if (fila === 7) {
+    const marcada = e.range.getValue() === true;
+    sh.getRange('C7').setValue(false);
+    if (!marcada) return;
+    try {
+      abrirSelectorProyectos();
+    } catch (err) {
+      console.error(new Date(), 'alEditarDecision', err);
+      sh.getParent().toast('No pude abrir el panel (' + err.message + '). Usá el menú Decisión → Elegir proyectos…', 'Decisión', 10);
+    }
   }
 }
 
