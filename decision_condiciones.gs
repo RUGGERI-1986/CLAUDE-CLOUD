@@ -7,7 +7,7 @@
  * Instalación: ver "Cómo probarlo" en el chat. Ejecutar 1 vez setupDecision() y 1 vez setupTriggers().
  */
 
-const CONFIG = {
+const CONFIG_DECISION = {
   HOJA_CONDICIONES: 'Condiciones',
   HOJA_VISTA: 'Decisión',
   HOJA_DATOS: 'Decisión_Datos',
@@ -26,9 +26,9 @@ const CONFIG = {
 
 function setupDecision() {
   const ss = SpreadsheetApp.getActive();
-  const cond = ss.getSheetByName(CONFIG.HOJA_CONDICIONES);
-  if (!cond) throw new Error('No existe la hoja "' + CONFIG.HOJA_CONDICIONES + '".');
-  validarEncabezados_(cond, {
+  const cond = ss.getSheetByName(CONFIG_DECISION.HOJA_CONDICIONES);
+  if (!cond) throw new Error('No existe la hoja "' + CONFIG_DECISION.HOJA_CONDICIONES + '".');
+  validarEncabezadosDecision_(cond, {
     A1: 'Cliente',
     B1: 'Proyecto',
     I1: 'Idioma Comunicación Cliente',
@@ -37,8 +37,8 @@ function setupDecision() {
     M1: 'Tráfico Mínimo'
   });
 
-  const datos = obtenerOCrear_(ss, CONFIG.HOJA_DATOS);
-  const vista = obtenerOCrear_(ss, CONFIG.HOJA_VISTA);
+  const datos = obtenerOCrearHojaDecision_(ss, CONFIG_DECISION.HOJA_DATOS);
+  const vista = obtenerOCrearHojaDecision_(ss, CONFIG_DECISION.HOJA_VISTA);
   armarDatos_(datos);
   armarVista_(vista);
   datos.hideSheet();
@@ -61,7 +61,7 @@ function setupTriggers() {
 
 function armarDatos_(sh) {
   sh.clear();
-  const C = "'" + CONFIG.HOJA_CONDICIONES + "'!";
+  const C = "'" + CONFIG_DECISION.HOJA_CONDICIONES + "'!";
   const sinProyecto = C + 'B2:B=""';
 
   sh.getRange('A1:G1').setValues([[
@@ -79,7 +79,7 @@ function armarDatos_(sh) {
   sh.getRange('G2').setFormula('=ARRAYFORMULA(IF(' + sinProyecto + ',"",' + C + 'I2:I))');
 
   // Listas para los desplegables
-  const todos = '"' + CONFIG.TODOS + '"';
+  const todos = '"' + CONFIG_DECISION.TODOS + '"';
   sh.getRange('I1:L1').setValues([['Lista clientes', 'Lista intervalos', 'Lista países', 'Lista proyectos']]);
   sh.getRange('I2').setFormula('={' + todos + ';SORT(UNIQUE(FILTER(A2:A,A2:A<>"")))}');
   sh.getRange('J2').setFormula('={' + todos + ';SORT(UNIQUE(FILTER(C2:C,C2:C<>"")))}');
@@ -99,8 +99,8 @@ function armarVista_(sh) {
   sh.getRange('A1:Z1000').clearDataValidations();
   sh.setHiddenGridlines(true);
 
-  const D = "'" + CONFIG.HOJA_DATOS + "'!";
-  const datos = sh.getParent().getSheetByName(CONFIG.HOJA_DATOS);
+  const D = "'" + CONFIG_DECISION.HOJA_DATOS + "'!";
+  const datos = sh.getParent().getSheetByName(CONFIG_DECISION.HOJA_DATOS);
 
   sh.getRange('B1').setValue('Decisión: qué proyectos necesitan medios').setFontSize(16).setFontWeight('bold');
   sh.getRange('B2').setValue('Elegí en las celdas azules. Los resultados se actualizan solos, ordenados por cantidad pendiente.')
@@ -113,7 +113,7 @@ function armarVista_(sh) {
     ['Cantidad mínima'], ['Tráfico mínimo exigido (desde)']
   ]);
   sh.getRange('C4:C9').setValues([
-    [CONFIG.TODOS], [CONFIG.TODOS], [CONFIG.TODOS], [CONFIG.TODOS], [1], [0]
+    [CONFIG_DECISION.TODOS], [CONFIG_DECISION.TODOS], [CONFIG_DECISION.TODOS], [CONFIG_DECISION.TODOS], [1], [0]
   ]);
   sh.getRange('D4:D9').setValues([
     ['Al elegir cliente, Proyecto muestra sólo los suyos'],
@@ -137,28 +137,28 @@ function armarVista_(sh) {
 
   // Resumen
   sh.getRange('B10').setFormula(
-    '=IF(B' + CONFIG.FILA_RESULTADOS + '="","Sin resultados: aflojá algún filtro (Cantidad mínima 0 o Todos).",' +
-    'COUNTA(B' + CONFIG.FILA_RESULTADOS + ':B)&" combinaciones · "&COUNTUNIQUE(C' + CONFIG.FILA_RESULTADOS +
-    ':C)&" proyectos · "&SUM(E' + CONFIG.FILA_RESULTADOS + ':E)&" links por conseguir")')
+    '=IF(B' + CONFIG_DECISION.FILA_RESULTADOS + '="","Sin resultados: aflojá algún filtro (Cantidad mínima 0 o Todos).",' +
+    'COUNTA(B' + CONFIG_DECISION.FILA_RESULTADOS + ':B)&" combinaciones · "&COUNTUNIQUE(C' + CONFIG_DECISION.FILA_RESULTADOS +
+    ':C)&" proyectos · "&SUM(E' + CONFIG_DECISION.FILA_RESULTADOS + ':E)&" links por conseguir")')
     .setFontWeight('bold');
   sh.getRange('B11').setValue('2 · Hacé clic en una fila de resultados y usá el menú Decisión → Enviar fila a FILTRO')
     .setFontColor('#666666');
 
   // Resultados
-  const hdr = sh.getRange(CONFIG.FILA_ENCABEZADO, 2, 1, 6);
+  const hdr = sh.getRange(CONFIG_DECISION.FILA_ENCABEZADO, 2, 1, 6);
   hdr.setValues([['Cliente', 'Proyecto', 'Intervalo de métrica', 'Cantidad', 'Tráfico mínimo', 'Países objetivo']])
     .setBackground('#1F3864').setFontColor('#FFFFFF').setFontWeight('bold');
   const cond = function (celda, col) {
-    return '(($' + 'C$' + celda + '="' + CONFIG.TODOS + '")+(' + D + col + '2:' + col + '=$C$' + celda + ')>0)';
+    return '(($' + 'C$' + celda + '="' + CONFIG_DECISION.TODOS + '")+(' + D + col + '2:' + col + '=$C$' + celda + ')>0)';
   };
-  const pais = '((' + '$C$7="' + CONFIG.TODOS + '")+REGEXMATCH(' + D + 'F2:F&"","(^|,)\\s*"&$C$7&"\\s*(,|$)")>0)';
-  sh.getRange(CONFIG.FILA_RESULTADOS, 2).setFormula(
+  const pais = '((' + '$C$7="' + CONFIG_DECISION.TODOS + '")+REGEXMATCH(' + D + 'F2:F&"","(^|,)\\s*"&$C$7&"\\s*(,|$)")>0)';
+  sh.getRange(CONFIG_DECISION.FILA_RESULTADOS, 2).setFormula(
     '=IFERROR(SORT(FILTER(' + D + 'A2:F,' + D + 'B2:B<>"",' +
     cond(4, 'A') + ',' + cond(5, 'B') + ',' + cond(6, 'C') + ',' + pais + ',' +
     D + 'D2:D>=N($C$8),' + D + 'E2:E>=N($C$9)),4,FALSE,1,TRUE,2,TRUE),"")');
-  sh.getRange(CONFIG.FILA_RESULTADOS, 5, 500, 2).setNumberFormat('#,##0').setHorizontalAlignment('right');
+  sh.getRange(CONFIG_DECISION.FILA_RESULTADOS, 5, 500, 2).setNumberFormat('#,##0').setHorizontalAlignment('right');
 
-  sh.setFrozenRows(CONFIG.FILA_ENCABEZADO);
+  sh.setFrozenRows(CONFIG_DECISION.FILA_ENCABEZADO);
   sh.setColumnWidth(1, 20);
   sh.setColumnWidth(2, 190);
   sh.setColumnWidth(3, 190);
@@ -184,18 +184,18 @@ function crearMenuDecision() {
 function alEditarDecision(e) {
   if (!e || !e.range) return;
   const sh = e.range.getSheet();
-  if (sh.getName() !== CONFIG.HOJA_VISTA) return;
+  if (sh.getName() !== CONFIG_DECISION.HOJA_VISTA) return;
   if (e.range.getRow() !== 4 || e.range.getColumn() !== 3) return;
   actualizarListaProyectos_(sh);
 }
 
 function actualizarListaProyectos_(vista) {
   const ss = vista.getParent();
-  const datos = ss.getSheetByName(CONFIG.HOJA_DATOS);
+  const datos = ss.getSheetByName(CONFIG_DECISION.HOJA_DATOS);
   const cliente = vista.getRange('C4').getValue();
   const celda = vista.getRange('C5');
   let regla;
-  if (cliente === CONFIG.TODOS) {
+  if (cliente === CONFIG_DECISION.TODOS) {
     regla = SpreadsheetApp.newDataValidation()
       .requireValueInRange(datos.getRange('L2:L'), true).setAllowInvalid(false).build();
   } else {
@@ -206,15 +206,15 @@ function actualizarListaProyectos_(vista) {
     });
     proyectos.sort();
     regla = SpreadsheetApp.newDataValidation()
-      .requireValueInList([CONFIG.TODOS].concat(proyectos), true).setAllowInvalid(false).build();
+      .requireValueInList([CONFIG_DECISION.TODOS].concat(proyectos), true).setAllowInvalid(false).build();
   }
-  celda.setDataValidation(regla).setValue(CONFIG.TODOS);
+  celda.setDataValidation(regla).setValue(CONFIG_DECISION.TODOS);
 }
 
 function limpiarFiltros() {
-  const vista = SpreadsheetApp.getActive().getSheetByName(CONFIG.HOJA_VISTA);
+  const vista = SpreadsheetApp.getActive().getSheetByName(CONFIG_DECISION.HOJA_VISTA);
   vista.getRange('C4:C9').setValues([
-    [CONFIG.TODOS], [CONFIG.TODOS], [CONFIG.TODOS], [CONFIG.TODOS], [1], [0]
+    [CONFIG_DECISION.TODOS], [CONFIG_DECISION.TODOS], [CONFIG_DECISION.TODOS], [CONFIG_DECISION.TODOS], [1], [0]
   ]);
   actualizarListaProyectos_(vista);
 }
@@ -227,13 +227,13 @@ function enviarAFiltro() {
   const ss = SpreadsheetApp.getActive();
   const ui = SpreadsheetApp.getUi();
   const vista = ss.getActiveSheet();
-  if (vista.getName() !== CONFIG.HOJA_VISTA) {
-    ui.alert('Ubicate en la hoja "' + CONFIG.HOJA_VISTA + '" y hacé clic en una fila de resultados.');
+  if (vista.getName() !== CONFIG_DECISION.HOJA_VISTA) {
+    ui.alert('Ubicate en la hoja "' + CONFIG_DECISION.HOJA_VISTA + '" y hacé clic en una fila de resultados.');
     return;
   }
   const fila = vista.getActiveRange().getRow();
-  if (fila < CONFIG.FILA_RESULTADOS) {
-    ui.alert('Hacé clic en una fila de resultados (desde la fila ' + CONFIG.FILA_RESULTADOS + ').');
+  if (fila < CONFIG_DECISION.FILA_RESULTADOS) {
+    ui.alert('Hacé clic en una fila de resultados (desde la fila ' + CONFIG_DECISION.FILA_RESULTADOS + ').');
     return;
   }
   const v = vista.getRange(fila, 2, 1, 6).getValues()[0];
@@ -243,19 +243,19 @@ function enviarAFiltro() {
     return;
   }
 
-  const filtro = ss.getSheetByName(CONFIG.HOJA_FILTRO);
-  validarEncabezados_(filtro, {
+  const filtro = ss.getSheetByName(CONFIG_DECISION.HOJA_FILTRO);
+  validarEncabezadosDecision_(filtro, {
     B5: 'Proyecto', B7: 'Tipo de servicio', B8: 'País', B9: 'Idioma', B10: 'Cantidad de links'
   });
 
   const tipo = 'Intervalo métrica ' + intervalo;
-  const tipos = ss.getSheetByName(CONFIG.HOJA_AUXILIAR).getRange('B2:B5').getValues().flat();
+  const tipos = ss.getSheetByName(CONFIG_DECISION.HOJA_AUXILIAR).getRange('B2:B5').getValues().flat();
   if (tipos.indexOf(tipo) === -1) {
     ui.alert('FILTRO no trabaja con "' + tipo + '" (Auxiliar!B2:B5 sólo tiene: ' +
       tipos.filter(String).join(', ') + '). No se envió nada.');
     return;
   }
-  const proyectos = ss.getSheetByName(CONFIG.HOJA_PARAMETROS).getRange('A2:A60').getValues().flat();
+  const proyectos = ss.getSheetByName(CONFIG_DECISION.HOJA_PARAMETROS).getRange('A2:A60').getValues().flat();
   if (proyectos.indexOf(proyecto) === -1) {
     ui.alert('El proyecto ' + proyecto + ' no está en Parámetros!A2:A60, FILTRO no lo acepta. No se envió nada.');
     return;
@@ -265,7 +265,7 @@ function enviarAFiltro() {
   const lista = String(v[5]).split(',').map(function (p) { return p.trim(); }).filter(String);
   const paisFiltro = vista.getRange('C7').getValue();
   let pais;
-  if (paisFiltro !== CONFIG.TODOS && lista.indexOf(paisFiltro) !== -1) pais = paisFiltro;
+  if (paisFiltro !== CONFIG_DECISION.TODOS && lista.indexOf(paisFiltro) !== -1) pais = paisFiltro;
   else if (lista.length === 1) pais = lista[0];
   else {
     const r = ui.prompt('¿Qué país? (' + lista.join(', ') + ')', ui.ButtonSet.OK_CANCEL);
@@ -277,11 +277,11 @@ function enviarAFiltro() {
     }
   }
 
-  const datos = ss.getSheetByName(CONFIG.HOJA_DATOS);
+  const datos = ss.getSheetByName(CONFIG_DECISION.HOJA_DATOS);
   const fd = datos.getRange(2, 2, datos.getLastRow() - 1, 6).getValues();
   const idioma = (fd.filter(function (f) { return f[0] === proyecto; })[0] || [])[5] || '';
 
-  const links = Math.min(cantidad, CONFIG.MAX_LINKS);
+  const links = Math.min(cantidad, CONFIG_DECISION.MAX_LINKS);
   filtro.getRange('C5').setValue(proyecto);
   filtro.getRange('C7').setValue(tipo);
   filtro.getRange('C8').setValue(pais);
@@ -290,7 +290,7 @@ function enviarAFiltro() {
   filtro.getRange('C11').setValue(trafico > 0 ? trafico : '');
   ss.setActiveSheet(filtro);
   ss.toast(proyecto + ' · ' + tipo + ' · ' + pais + ' · ' + links + ' links' +
-    (cantidad > links ? ' (pedían ' + cantidad + ', FILTRO admite ' + CONFIG.MAX_LINKS + ')' : ''),
+    (cantidad > links ? ' (pedían ' + cantidad + ', FILTRO admite ' + CONFIG_DECISION.MAX_LINKS + ')' : ''),
     'Enviado a FILTRO', 8);
 }
 
@@ -298,11 +298,11 @@ function enviarAFiltro() {
 /* UTILIDADES                                                          */
 /* ------------------------------------------------------------------ */
 
-function obtenerOCrear_(ss, nombre) {
+function obtenerOCrearHojaDecision_(ss, nombre) {
   return ss.getSheetByName(nombre) || ss.insertSheet(nombre);
 }
 
-function validarEncabezados_(sh, esperados) {
+function validarEncabezadosDecision_(sh, esperados) {
   Object.keys(esperados).forEach(function (a1) {
     const real = String(sh.getRange(a1).getValue()).trim();
     if (real.indexOf(esperados[a1]) !== 0) {
