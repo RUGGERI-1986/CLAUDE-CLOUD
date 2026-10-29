@@ -2,9 +2,10 @@
  * DECISIÓN — vista filtrable de la hoja Condiciones.
  * No modifica Condiciones. Crea 2 hojas:
  *   - "Decisión_Datos" (oculta): fórmulas vivas que separan la columna L y reúnen A, B, I, J, M.
- *   - "Decisión": filtros desplegables + resultados + envío de la fila elegida a FILTRO.
+ *   - "Decisión": filtros desplegables (con varios proyectos a la vez) + resultados + envío de la fila elegida a FILTRO.
  *
- * Instalación: ver "Cómo probarlo" en el chat. Ejecutar 1 vez setupDecision() y 1 vez setupTriggers().
+ * Instalación: ejecutar 1 vez setupDecision() y 1 vez setupTriggers().
+ * Volver a ejecutar setupDecision() reconstruye la hoja "Decisión" (los filtros vuelven a "Todos").
  */
 
 const CONFIG_DECISION = {
@@ -15,10 +16,12 @@ const CONFIG_DECISION = {
   HOJA_AUXILIAR: 'Auxiliar',
   HOJA_PARAMETROS: 'Parámetros',
   HOJA_BASE: 'BASE',
-  FILA_ENCABEZADO: 12,
-  FILA_RESULTADOS: 13,
+  FILA_ENCABEZADO: 15,
+  FILA_RESULTADOS: 16,
+  FILAS_RESULTADOS: 500,
   MAX_LINKS: 50,
-  TODOS: 'Todos'
+  TODOS: 'Todos',
+  TODOS_PROYECTOS: 'Todos los proyectos'
 };
 
 /* ------------------------------------------------------------------ */
@@ -79,15 +82,14 @@ function armarDatos_(sh) {
   sh.getRange('F2').setFormula('=ARRAYFORMULA(IF(' + sinProyecto + ',"",' + C + 'J2:J))');
   sh.getRange('G2').setFormula('=ARRAYFORMULA(IF(' + sinProyecto + ',"",' + C + 'I2:I))');
 
-  // Listas para los desplegables
+  // Listas para los desplegables (los proyectos los arma el script, según el cliente)
   const todos = '"' + CONFIG_DECISION.TODOS + '"';
-  sh.getRange('I1:L1').setValues([['Lista clientes', 'Lista intervalos', 'Lista países', 'Lista proyectos']]);
+  sh.getRange('I1:K1').setValues([['Lista clientes', 'Lista intervalos', 'Lista países']]);
   sh.getRange('I2').setFormula('={' + todos + ';SORT(UNIQUE(FILTER(A2:A,A2:A<>"")))}');
   sh.getRange('J2').setFormula('={' + todos + ';SORT(UNIQUE(FILTER(C2:C,C2:C<>"")))}');
   sh.getRange('K2').setFormula(
     '=ARRAYFORMULA({' + todos + ';SORT(UNIQUE(FILTER(TRIM(FLATTEN(SPLIT(TEXTJOIN(",",TRUE,F2:F),","))),' +
     'TRIM(FLATTEN(SPLIT(TEXTJOIN(",",TRUE,F2:F),",")))<>"")))})');
-  sh.getRange('L2').setFormula('={' + todos + ';SORT(UNIQUE(FILTER(B2:B,B2:B<>"")))}');
   sh.setFrozenRows(1);
 }
 
@@ -96,77 +98,139 @@ function armarDatos_(sh) {
 /* ------------------------------------------------------------------ */
 
 function armarVista_(sh) {
-  sh.clear();
-  sh.getRange('A1:Z1000').clearDataValidations();
-  sh.setHiddenGridlines(true);
-
+  const T = CONFIG_DECISION.TODOS;
+  const TP = CONFIG_DECISION.TODOS_PROYECTOS;
+  const ini = CONFIG_DECISION.FILA_RESULTADOS;
+  const hdr = CONFIG_DECISION.FILA_ENCABEZADO;
+  const nRes = CONFIG_DECISION.FILAS_RESULTADOS;
   const D = "'" + CONFIG_DECISION.HOJA_DATOS + "'!";
   const datos = sh.getParent().getSheetByName(CONFIG_DECISION.HOJA_DATOS);
 
-  sh.getRange('B1').setValue('Decisión: qué proyectos necesitan medios').setFontSize(16).setFontWeight('bold');
-  sh.getRange('B2').setValue('Elegí en las celdas azules. Los resultados se actualizan solos, ordenados por cantidad pendiente.')
-    .setFontColor('#666666');
+  // Colores: los mismos de FILTRO
+  const NAVY = '#1F2A3C', AZUL = '#DBE7FB', AZUL_SUAVE = '#EEF3FC', PANEL = '#F8F6F4';
+  const VERDE = '#2E7D4F', VERDE_SUAVE = '#E9F5EE', ROJO_SUAVE = '#FDE8E8', SUAVE = '#6B7280', BORDE = '#B6C8EA';
+
+  // Limpieza total (no se toca ninguna otra hoja)
+  sh.getRange(1, 1, sh.getMaxRows(), sh.getMaxColumns()).breakApart();
+  sh.clear();
+  sh.clearConditionalFormatRules();
+  sh.getRange('A1:Z1000').clearDataValidations();
+  sh.setFrozenRows(0);
+  sh.setHiddenGridlines(true);
+  sh.getRange('A1:J' + (ini + nRes)).setFontSize(10).setVerticalAlignment('middle');
+
+  // Anchos y altos
+  [44, 190, 200, 120, 95, 105, 330, 20, 200, 95].forEach(function (w, i) { sh.setColumnWidth(i + 1, w); });
+  [56, 30, 14, 34].forEach(function (h, i) { sh.setRowHeight(i + 1, h); });
+  sh.setRowHeights(5, 7, 28);
+  sh.setRowHeight(12, 14);
+  sh.setRowHeight(13, 42);
+  sh.setRowHeight(14, 32);
+  sh.setRowHeight(hdr, 30);
+  sh.setRowHeights(ini, nRes, 24);
+
+  // Título
+  sh.getRange('A1:J1').merge().setBackground(NAVY);
+  sh.getRange('A1').setValue('Decisión de asignación de medios')
+    .setFontColor('#FFFFFF').setFontSize(20).setFontWeight('bold');
+  sh.getRange('A2:J2').merge().setBackground(NAVY);
+  sh.getRange('A2').setValue('Elegí en las celdas azules. Podés sumar varios proyectos. Los resultados se ordenan por cantidad pendiente.')
+    .setFontColor('#D6DCE8').setFontSize(11);
+
+  // Encabezados de sección
+  sh.getRange('B4:G4').merge();
+  sh.getRange('B4').setValue('1 · Qué querés ver').setFontSize(12).setFontWeight('bold');
+  sh.getRange('I4:J4').merge();
+  sh.getRange('I4').setValue('Resumen de lo filtrado').setFontSize(12).setFontWeight('bold');
 
   // Filtros
-  sh.getRange('B3').setValue('1 · Filtros').setFontWeight('bold');
-  sh.getRange('B4:B9').setValues([
-    ['Cliente'], ['Proyecto'], ['Intervalo de métrica'], ['País objetivo'],
-    ['Cantidad mínima'], ['Tráfico mínimo exigido (desde)']
-  ]);
-  sh.getRange('C4:C9').setValues([
-    [CONFIG_DECISION.TODOS], [CONFIG_DECISION.TODOS], [CONFIG_DECISION.TODOS], [CONFIG_DECISION.TODOS], [1], [0]
-  ]);
-  sh.getRange('D4:D9').setValues([
-    ['Al elegir cliente, Proyecto muestra sólo los suyos'],
-    ['Código del proyecto'],
-    ['DR del medio: 0-20, 21-40, ...'],
-    ['Coincide si el país está en la lista del proyecto'],
-    ['1 oculta los intervalos con cantidad 0'],
-    ['Proyectos que exigen al menos este tráfico']
-  ]).setFontColor('#666666');
-  sh.getRange('C4:C9').setBackground('#D9E8FB').setHorizontalAlignment('left');
+  sh.getRange('B5:B11').setValues([
+    ['Cliente'], ['Proyectos elegidos'], ['Agregar o quitar proyecto'], ['Intervalo de métrica'],
+    ['País objetivo'], ['Cantidad mínima'], ['Tráfico mínimo exigido (desde)']
+  ]).setFontWeight('bold');
+  sh.getRange('C5').setValue(T);
+  sh.getRange('C6:G6').merge();
+  sh.getRange('C6').setValue(TP);
+  sh.getRange('C7').setValue('');
+  sh.getRange('C8').setValue(T);
+  sh.getRange('C9').setValue(T);
+  sh.getRange('C10').setValue(1);
+  sh.getRange('C11').setValue(0);
+  [['C5'], ['C7'], ['C8'], ['C9'], ['C10'], ['C11']].forEach(function (a) {
+    sh.getRange(a[0]).setBackground(AZUL).setFontSize(11).setFontWeight('bold').setHorizontalAlignment('left')
+      .setBorder(true, true, true, true, false, false, BORDE, SpreadsheetApp.BorderStyle.SOLID);
+  });
+  sh.getRange('C6:G6').setBackground(AZUL_SUAVE).setFontSize(11).setFontWeight('bold').setWrap(true)
+    .setBorder(true, true, true, true, false, false, BORDE, SpreadsheetApp.BorderStyle.SOLID);
 
+  const pistas = [['D5', 'Los proyectos para sumar son sólo los de este cliente'],
+    ['D7', 'Elegí uno para sumarlo; volvé a elegirlo para quitarlo'],
+    ['D8', 'DR del medio: 0-20, 21-40, ...'],
+    ['D9', 'Coincide si el país está en la lista del proyecto'],
+    ['D10', '1 oculta los intervalos sin cantidad pendiente'],
+    ['D11', 'Proyectos que exigen al menos este tráfico']];
+  pistas.forEach(function (p) { sh.getRange(p[0]).setValue(p[1]).setFontSize(9).setFontColor(SUAVE); });
+
+  // Resumen (panel gris)
+  sh.getRange('I5:I8').setValues([['Combinaciones'], ['Proyectos distintos'], ['Clientes'], ['Links por conseguir']]);
+  sh.getRange('J5:J8').setFormulas([
+    ['=COUNTIF(B' + ini + ':B,"?*")'],
+    ['=IFERROR(COUNTUNIQUE(C' + ini + ':C),0)'],
+    ['=IFERROR(COUNTUNIQUE(B' + ini + ':B),0)'],
+    ['=SUM(E' + ini + ':E)']
+  ]);
+  sh.getRange('I5:J8').setBackground(PANEL);
+  sh.getRange('J5:J8').setFontSize(12).setFontWeight('bold').setHorizontalAlignment('right');
+
+  // Mensaje de estado
+  sh.getRange('B13:J13').merge().setBackground(VERDE_SUAVE);
+  sh.getRange('B13').setFormula(
+    '=IF(B' + ini + '="","Sin resultados con estos filtros. Aflojá alguno (Cantidad mínima 0, o Todos).",' +
+    'J5&" combinaciones de "&J6&" proyectos · "&J8&" links por conseguir")')
+    .setFontSize(11).setFontWeight('bold').setWrap(true);
+
+  // Resultados
+  sh.getRange('B14:G14').merge();
+  sh.getRange('B14').setValue('2 · Hacé clic en una fila y usá el menú Decisión → Enviar fila a FILTRO')
+    .setFontSize(11).setFontWeight('bold');
+  sh.getRange('A' + hdr).setValue('Nº');
+  sh.getRange(hdr, 2, 1, 6).setValues([['Cliente', 'Proyecto', 'Intervalo de métrica', 'Cantidad', 'Tráfico mínimo', 'Países objetivo']]);
+  sh.getRange(hdr, 1, 1, 7).setBackground(VERDE).setFontColor('#FFFFFF').setFontWeight('bold');
+  sh.getRange('A' + hdr + ':A' + (ini + nRes)).setHorizontalAlignment('center');
+  sh.getRange('D' + hdr + ':F' + (ini + nRes)).setHorizontalAlignment('center');
+  sh.getRange('E' + ini + ':F' + (ini + nRes)).setNumberFormat('#,##0');
+  sh.getRange('A' + ini + ':A' + (ini + nRes)).setFontSize(9).setFontColor(SUAVE);
+  sh.getRange('A' + ini).setFormula('=ARRAYFORMULA(IF(B' + ini + ':B="","",ROW(B' + ini + ':B)-' + (ini - 1) + '))');
+
+  const cond = function (celda, col) {
+    return '((($C$' + celda + '="' + T + '")+(' + D + col + '2:' + col + '=$C$' + celda + '))>0)';
+  };
+  const proyectos = '((($C$6="' + TP + '")+REGEXMATCH(' + D + 'B2:B&"","^("&SUBSTITUTE(SUBSTITUTE($C$6,".","\\."),", ","|")&")$"))>0)';
+  const pais = '((($C$9="' + T + '")+REGEXMATCH(' + D + 'F2:F&"","(^|,)\\s*"&$C$9&"\\s*(,|$)"))>0)';
+  sh.getRange(ini, 2).setFormula(
+    '=IFERROR(SORT(FILTER(' + D + 'A2:F,' + D + 'B2:B<>"",' +
+    cond(5, 'A') + ',' + proyectos + ',' + cond(8, 'C') + ',' + pais + ',' +
+    D + 'D2:D>=N($C$10),' + D + 'E2:E>=N($C$11)),4,FALSE,1,TRUE,2,TRUE),"")');
+
+  // Formato condicional: mensaje en rojo si no hay resultados y filas alternadas
+  sh.setConditionalFormatRules([
+    SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied('=$B$' + ini + '=""')
+      .setBackground(ROJO_SUAVE).setRanges([sh.getRange('B13:J13')]).build(),
+    SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied('=AND($B' + ini + '<>"",ISEVEN(ROW()))')
+      .setBackground('#F4F7FB').setRanges([sh.getRange(ini, 1, nRes, 7)]).build()
+  ]);
+
+  // Desplegables
   const regla = function (rango) {
     return SpreadsheetApp.newDataValidation().requireValueInRange(rango, true).setAllowInvalid(false).build();
   };
-  sh.getRange('C4').setDataValidation(regla(datos.getRange('I2:I')));
-  sh.getRange('C5').setDataValidation(regla(datos.getRange('L2:L')));
-  sh.getRange('C6').setDataValidation(regla(datos.getRange('J2:J')));
-  sh.getRange('C7').setDataValidation(regla(datos.getRange('K2:K')));
-  sh.getRange('C8:C9').setDataValidation(
+  sh.getRange('C5').setDataValidation(regla(datos.getRange('I2:I')));
+  sh.getRange('C8').setDataValidation(regla(datos.getRange('J2:J')));
+  sh.getRange('C9').setDataValidation(regla(datos.getRange('K2:K')));
+  sh.getRange('C10:C11').setDataValidation(
     SpreadsheetApp.newDataValidation().requireNumberGreaterThanOrEqualTo(0).setAllowInvalid(false).build());
+  actualizarListaProyectos_(sh);
 
-  // Resumen
-  sh.getRange('B10').setFormula(
-    '=IF(B' + CONFIG_DECISION.FILA_RESULTADOS + '="","Sin resultados: aflojá algún filtro (Cantidad mínima 0 o Todos).",' +
-    'COUNTA(B' + CONFIG_DECISION.FILA_RESULTADOS + ':B)&" combinaciones · "&COUNTUNIQUE(C' + CONFIG_DECISION.FILA_RESULTADOS +
-    ':C)&" proyectos · "&SUM(E' + CONFIG_DECISION.FILA_RESULTADOS + ':E)&" links por conseguir")')
-    .setFontWeight('bold');
-  sh.getRange('B11').setValue('2 · Hacé clic en una fila de resultados y usá el menú Decisión → Enviar fila a FILTRO')
-    .setFontColor('#666666');
-
-  // Resultados
-  const hdr = sh.getRange(CONFIG_DECISION.FILA_ENCABEZADO, 2, 1, 6);
-  hdr.setValues([['Cliente', 'Proyecto', 'Intervalo de métrica', 'Cantidad', 'Tráfico mínimo', 'Países objetivo']])
-    .setBackground('#1F3864').setFontColor('#FFFFFF').setFontWeight('bold');
-  const cond = function (celda, col) {
-    return '(($' + 'C$' + celda + '="' + CONFIG_DECISION.TODOS + '")+(' + D + col + '2:' + col + '=$C$' + celda + ')>0)';
-  };
-  const pais = '((' + '$C$7="' + CONFIG_DECISION.TODOS + '")+REGEXMATCH(' + D + 'F2:F&"","(^|,)\\s*"&$C$7&"\\s*(,|$)")>0)';
-  sh.getRange(CONFIG_DECISION.FILA_RESULTADOS, 2).setFormula(
-    '=IFERROR(SORT(FILTER(' + D + 'A2:F,' + D + 'B2:B<>"",' +
-    cond(4, 'A') + ',' + cond(5, 'B') + ',' + cond(6, 'C') + ',' + pais + ',' +
-    D + 'D2:D>=N($C$8),' + D + 'E2:E>=N($C$9)),4,FALSE,1,TRUE,2,TRUE),"")');
-  sh.getRange(CONFIG_DECISION.FILA_RESULTADOS, 5, 500, 2).setNumberFormat('#,##0').setHorizontalAlignment('right');
-
-  sh.setFrozenRows(CONFIG_DECISION.FILA_ENCABEZADO);
-  sh.setColumnWidth(1, 20);
-  sh.setColumnWidth(2, 190);
-  sh.setColumnWidth(3, 190);
-  sh.setColumnWidth(4, 190);
-  sh.setColumnWidth(5, 110);
-  sh.setColumnWidth(6, 120);
-  sh.setColumnWidth(7, 360);
   sh.setTabColor('#2E6FDE');
 }
 
@@ -181,14 +245,78 @@ function crearMenuDecision() {
     .addToUi();
 }
 
-/** Al cambiar Cliente, Proyecto sólo ofrece los proyectos de ese cliente. */
+/**
+ * Hoja Decisión:
+ *  - C5 (Cliente): limpia los proyectos elegidos y deja para sumar sólo los de ese cliente.
+ *  - C7 (Agregar o quitar proyecto): suma el elegido a C6, o lo quita si ya estaba.
+ * Las ediciones en FILTRO las atiende onEdit() de Autorrelleno.gs, que llama a cascadaFiltro_.
+ */
 function alEditarDecision(e) {
   if (!e || !e.range) return;
   const sh = e.range.getSheet();
-  // Las ediciones en FILTRO las atiende onEdit() de Autorrelleno.gs, que llama a cascadaFiltro_.
   if (sh.getName() !== CONFIG_DECISION.HOJA_VISTA) return;
-  if (e.range.getRow() !== 4 || e.range.getColumn() !== 3) return;
-  actualizarListaProyectos_(sh);
+  if (e.range.getColumn() !== 3 || e.range.getNumRows() !== 1) return;
+  const fila = e.range.getRow();
+  if (fila === 5) {
+    sh.getRange('C6').setValue(CONFIG_DECISION.TODOS_PROYECTOS);
+    sh.getRange('C7').setValue('');
+    actualizarListaProyectos_(sh);
+  } else if (fila === 7) {
+    alternarProyecto_(sh);
+  }
+}
+
+function alternarProyecto_(sh) {
+  const TP = CONFIG_DECISION.TODOS_PROYECTOS;
+  const picker = sh.getRange('C7');
+  const elegido = String(picker.getValue()).trim();
+  if (!elegido) return;
+  const celda = sh.getRange('C6');
+  let lista = String(celda.getValue()).split(',').map(function (p) { return p.trim(); })
+    .filter(function (p) { return p && p !== TP; });
+  let aviso;
+  if (elegido === TP) {
+    lista = [];
+    aviso = 'Selección limpiada: se muestran todos los proyectos.';
+  } else if (lista.indexOf(elegido) !== -1) {
+    lista = lista.filter(function (p) { return p !== elegido; });
+    aviso = 'Quitado ' + elegido + ' (' + lista.length + ' elegidos).';
+  } else {
+    lista.push(elegido);
+    aviso = 'Agregado ' + elegido + ' (' + lista.length + ' elegidos).';
+  }
+  lista.sort();
+  celda.setValue(lista.length ? lista.join(', ') : TP);
+  picker.setValue('');
+  sh.getParent().toast(aviso, 'Decisión', 4);
+}
+
+/** Deja en C7 sólo los proyectos del cliente elegido en C5 (todos si es "Todos"). */
+function actualizarListaProyectos_(vista) {
+  const datos = vista.getParent().getSheetByName(CONFIG_DECISION.HOJA_DATOS);
+  const cliente = vista.getRange('C5').getValue();
+  const filas = datos.getRange(2, 1, datos.getLastRow() - 1, 2).getValues();
+  const proyectos = [];
+  filas.forEach(function (f) {
+    if (f[1] && (cliente === CONFIG_DECISION.TODOS || f[0] === cliente) && proyectos.indexOf(f[1]) === -1) {
+      proyectos.push(f[1]);
+    }
+  });
+  proyectos.sort();
+  vista.getRange('C7').setDataValidation(SpreadsheetApp.newDataValidation()
+    .requireValueInList([CONFIG_DECISION.TODOS_PROYECTOS].concat(proyectos), true).setAllowInvalid(false).build());
+}
+
+function limpiarFiltros() {
+  const vista = SpreadsheetApp.getActive().getSheetByName(CONFIG_DECISION.HOJA_VISTA);
+  vista.getRange('C5').setValue(CONFIG_DECISION.TODOS);
+  vista.getRange('C6').setValue(CONFIG_DECISION.TODOS_PROYECTOS);
+  vista.getRange('C7').setValue('');
+  vista.getRange('C8').setValue(CONFIG_DECISION.TODOS);
+  vista.getRange('C9').setValue(CONFIG_DECISION.TODOS);
+  vista.getRange('C10').setValue(1);
+  vista.getRange('C11').setValue(0);
+  actualizarListaProyectos_(vista);
 }
 
 /* ------------------------------------------------------------------ */
@@ -317,36 +445,6 @@ function leerCondicionesFiltro_(ss) {
   }).filter(function (r) { return r.proyecto; });
 }
 
-function actualizarListaProyectos_(vista) {
-  const ss = vista.getParent();
-  const datos = ss.getSheetByName(CONFIG_DECISION.HOJA_DATOS);
-  const cliente = vista.getRange('C4').getValue();
-  const celda = vista.getRange('C5');
-  let regla;
-  if (cliente === CONFIG_DECISION.TODOS) {
-    regla = SpreadsheetApp.newDataValidation()
-      .requireValueInRange(datos.getRange('L2:L'), true).setAllowInvalid(false).build();
-  } else {
-    const filas = datos.getRange(2, 1, datos.getLastRow() - 1, 2).getValues();
-    const proyectos = [];
-    filas.forEach(function (f) {
-      if (f[0] === cliente && f[1] && proyectos.indexOf(f[1]) === -1) proyectos.push(f[1]);
-    });
-    proyectos.sort();
-    regla = SpreadsheetApp.newDataValidation()
-      .requireValueInList([CONFIG_DECISION.TODOS].concat(proyectos), true).setAllowInvalid(false).build();
-  }
-  celda.setDataValidation(regla).setValue(CONFIG_DECISION.TODOS);
-}
-
-function limpiarFiltros() {
-  const vista = SpreadsheetApp.getActive().getSheetByName(CONFIG_DECISION.HOJA_VISTA);
-  vista.getRange('C4:C9').setValues([
-    [CONFIG_DECISION.TODOS], [CONFIG_DECISION.TODOS], [CONFIG_DECISION.TODOS], [CONFIG_DECISION.TODOS], [1], [0]
-  ]);
-  actualizarListaProyectos_(vista);
-}
-
 /* ------------------------------------------------------------------ */
 /* ENVIAR FILA A FILTRO                                                */
 /* ------------------------------------------------------------------ */
@@ -391,7 +489,7 @@ function enviarAFiltro() {
 
   // País: el filtro elegido si coincide; si hay uno solo, ese; si no, se pregunta.
   const lista = String(v[5]).split(',').map(function (p) { return p.trim(); }).filter(String);
-  const paisFiltro = vista.getRange('C7').getValue();
+  const paisFiltro = vista.getRange('C9').getValue();
   let pais;
   if (paisFiltro !== CONFIG_DECISION.TODOS && lista.indexOf(paisFiltro) !== -1) pais = paisFiltro;
   else if (lista.length === 1) pais = lista[0];
