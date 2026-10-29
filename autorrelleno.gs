@@ -1,6 +1,7 @@
 /**
  * Autorrelleno.gs — archivo NUEVO de la planilla "Asignación de medios" (no reemplaza CargarBulk.gs)
- * Versión 2026-10-29 d (llama a cascadaFiltro_ de Decision.gs para restringir los desplegables; reacciona también a C8)
+ * Versión 2026-10-29 e (llama a cascadaFiltro_ de Decision.gs para restringir los desplegables; reacciona también a C8;
+ *   busca las columnas de Condiciones por encabezado y Tráfico Mínimo es opcional)
  * Qué hace: al elegir el proyecto en FILTRO!C5 completa solo Tipo de servicio, País, Idioma,
  * Cantidad y Tráfico mínimo con los datos de la pestaña Condiciones. Todo queda editable a mano.
  * Si después cambiás el Tipo de servicio (C7), recalcula País, Idioma, Cantidad y Tráfico para ese intervalo.
@@ -67,26 +68,26 @@ function autorrellenarFiltro_(ss, cambioProyecto) {
   var proyecto = String(filtro.getRange(AUTO.PROYECTO, 3).getValue()).trim();
   if (!proyecto) return;
 
-  // 1) Condiciones del proyecto
+  // 1) Condiciones del proyecto (las columnas se buscan por encabezado: si insertan o mueven columnas, sigue andando)
   var cond = ss.getSheetByName(AUTO.COND_SHEET);
-  var datos = cond.getRange(1, 2, cond.getLastRow(), 13).getValues();   // B:N
-  var enc = datos[0];
-  var esperados = { 0: AUTO.COND_HEADERS.B, 7: AUTO.COND_HEADERS.I, 8: AUTO.COND_HEADERS.J,
-                    4: AUTO.COND_HEADERS.F, 10: AUTO.COND_HEADERS.L, 11: AUTO.COND_HEADERS.M };
-  for (var k in esperados) {
-    if (String(enc[k]).trim() !== esperados[k]) {
-      throw new Error('Cambiaron los encabezados de Condiciones (esperaba "' + esperados[k] + '"). No completé nada.');
-    }
-  }
+  var datos = cond.getRange(1, 1, cond.getLastRow(), cond.getLastColumn()).getValues();
+  var enc = datos[0].map(function (h) { return String(h).trim(); });
+  var col_ = function (nombre, opcional) {
+    var i = enc.indexOf(nombre);
+    if (i < 0 && !opcional) throw new Error('Condiciones no tiene la columna "' + nombre + '". No completé nada.');
+    return i;
+  };
+  var iProy = col_(AUTO.COND_HEADERS.B), iIdi = col_(AUTO.COND_HEADERS.I), iPais = col_(AUTO.COND_HEADERS.J),
+      iTipo = col_(AUTO.COND_HEADERS.L), iTraf = col_(AUTO.COND_HEADERS.M, true);   // Tráfico Mínimo es opcional
   var filas = [];
   datos.slice(1).forEach(function (d) {
-    if (String(d[0]).trim() !== proyecto) return;
-    var m = String(d[10]).match(/^(.*?)\s*->\s*(\d+)\s*$/);
+    if (String(d[iProy]).trim() !== proyecto) return;
+    var m = String(d[iTipo]).match(/^(.*?)\s*->\s*(\d+)\s*$/);
     if (!m) return;
     filas.push({
       intervalo: m[1].trim(), cantidad: Number(m[2]) || 0,
-      paises: String(d[8]).split(',').map(function (p) { return p.trim(); }).filter(String),
-      idioma: String(d[7]).trim(), trafico: d[11]
+      paises: String(d[iPais]).split(',').map(function (p) { return p.trim(); }).filter(String),
+      idioma: String(d[iIdi]).trim(), trafico: iTraf < 0 ? '' : d[iTraf]
     });
   });
   if (!filas.length) {

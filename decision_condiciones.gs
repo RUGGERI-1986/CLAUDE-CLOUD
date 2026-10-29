@@ -32,21 +32,43 @@ function setupDecision() {
   const ss = SpreadsheetApp.getActive();
   const cond = ss.getSheetByName(CONFIG_DECISION.HOJA_CONDICIONES);
   if (!cond) throw new Error('No existe la hoja "' + CONFIG_DECISION.HOJA_CONDICIONES + '".');
-  validarEncabezadosDecision_(cond, {
-    A1: 'Cliente',
-    B1: 'Proyecto',
-    I1: 'Idioma Comunicación Cliente',
-    J1: 'Países Objetivo',
-    L1: 'Tipo de Servicio - Cantidad',
-    M1: 'Tráfico Mínimo'
-  });
+  const columnas = columnasCondiciones_(cond);
 
   const datos = obtenerOCrearHojaDecision_(ss, CONFIG_DECISION.HOJA_DATOS);
   const vista = obtenerOCrearHojaDecision_(ss, CONFIG_DECISION.HOJA_VISTA);
-  armarDatos_(datos);
+  armarDatos_(datos, columnas);
   armarVista_(vista);
   datos.hideSheet();
   ss.setActiveSheet(vista);
+}
+
+/**
+ * Ubica las columnas de Condiciones por su encabezado (no por letra), así no se rompe si insertan o
+ * mueven columnas. "Tráfico Mínimo" es opcional: si no existe, se toma 0.
+ */
+function columnasCondiciones_(cond) {
+  const enc = cond.getRange(1, 1, 1, cond.getLastColumn()).getValues()[0].map(function (h) { return String(h).trim(); });
+  const buscar = function (nombre, opcional) {
+    const i = enc.indexOf(nombre);
+    if (i < 0 && !opcional) {
+      throw new Error('Condiciones no tiene la columna "' + nombre + '". Encabezados encontrados: ' + enc.filter(String).join(' | '));
+    }
+    return i;
+  };
+  return {
+    cliente: buscar('Cliente'),
+    proyecto: buscar('Proyecto'),
+    idioma: buscar('Idioma Comunicación Cliente'),
+    paises: buscar('Países Objetivo'),
+    tipo: buscar('Tipo de Servicio - Cantidad'),
+    trafico: buscar('Tráfico Mínimo', true)
+  };
+}
+
+function letraColumna_(i) {
+  let s = '';
+  for (i += 1; i > 0; i = Math.floor((i - 1) / 26)) s = String.fromCharCode(65 + ((i - 1) % 26)) + s;
+  return s;
 }
 
 function setupTriggers() {
@@ -63,24 +85,27 @@ function setupTriggers() {
 /* HOJA OCULTA: DATOS                                                  */
 /* ------------------------------------------------------------------ */
 
-function armarDatos_(sh) {
+function armarDatos_(sh, columnas) {
   sh.clear();
   const C = "'" + CONFIG_DECISION.HOJA_CONDICIONES + "'!";
-  const sinProyecto = C + 'B2:B=""';
+  const rango = function (i) { const l = letraColumna_(i); return C + l + '2:' + l; };
+  const sinProyecto = rango(columnas.proyecto) + '=""';
+  const L = rango(columnas.tipo);
 
   sh.getRange('A1:G1').setValues([[
     'Cliente', 'Proyecto', 'Intervalo', 'Cantidad', 'Tráfico mínimo', 'Países', 'Idioma'
   ]]);
-  sh.getRange('A2').setFormula('=ARRAYFORMULA(IF(' + sinProyecto + ',"",' + C + 'A2:A))');
-  sh.getRange('B2').setFormula('=ARRAYFORMULA(IF(' + sinProyecto + ',"",' + C + 'B2:B))');
+  sh.getRange('A2').setFormula('=ARRAYFORMULA(IF(' + sinProyecto + ',"",' + rango(columnas.cliente) + '))');
+  sh.getRange('B2').setFormula('=ARRAYFORMULA(IF(' + sinProyecto + ',"",' + rango(columnas.proyecto) + '))');
   sh.getRange('C2').setFormula(
-    '=ARRAYFORMULA(IF(' + sinProyecto + ',"",IFERROR(REGEXEXTRACT(' + C + 'L2:L&"","(\\d+-\\d+)"),"")))');
+    '=ARRAYFORMULA(IF(' + sinProyecto + ',"",IFERROR(REGEXEXTRACT(' + L + '&"","(\\d+-\\d+)"),"")))');
   sh.getRange('D2').setFormula(
-    '=ARRAYFORMULA(IF(' + sinProyecto + ',"",IFERROR(VALUE(REGEXEXTRACT(' + C + 'L2:L&"","->\\s*(\\d+)")),0)))');
-  sh.getRange('E2').setFormula(
-    '=ARRAYFORMULA(IF(' + sinProyecto + ',"",IFERROR(VALUE(' + C + 'M2:M),0)))');
-  sh.getRange('F2').setFormula('=ARRAYFORMULA(IF(' + sinProyecto + ',"",' + C + 'J2:J))');
-  sh.getRange('G2').setFormula('=ARRAYFORMULA(IF(' + sinProyecto + ',"",' + C + 'I2:I))');
+    '=ARRAYFORMULA(IF(' + sinProyecto + ',"",IFERROR(VALUE(REGEXEXTRACT(' + L + '&"","->\\s*(\\d+)")),0)))');
+  sh.getRange('E2').setFormula(columnas.trafico < 0
+    ? '=ARRAYFORMULA(IF(' + sinProyecto + ',"",0))'
+    : '=ARRAYFORMULA(IF(' + sinProyecto + ',"",IFERROR(VALUE(' + rango(columnas.trafico) + '),0)))');
+  sh.getRange('F2').setFormula('=ARRAYFORMULA(IF(' + sinProyecto + ',"",' + rango(columnas.paises) + '))');
+  sh.getRange('G2').setFormula('=ARRAYFORMULA(IF(' + sinProyecto + ',"",' + rango(columnas.idioma) + '))');
 
   // Listas para los desplegables (los proyectos los arma el script, según el cliente)
   const todos = '"' + CONFIG_DECISION.TODOS + '"';
@@ -432,15 +457,17 @@ function leerCondicionesFiltro_(ss) {
   const sh = ss.getSheetByName(CONFIG_DECISION.HOJA_CONDICIONES);
   const n = sh.getLastRow() - 1;
   if (n < 1) return [];
-  return sh.getRange(2, 1, n, 13).getValues().map(function (f) {
-    const m = String(f[11]).match(/(\d+-\d+)\s*->\s*(\d+)/);
+  const c = columnasCondiciones_(sh);
+  return sh.getRange(2, 1, n, sh.getLastColumn()).getValues().map(function (f) {
+    const m = String(f[c.tipo]).match(/(\d+-\d+)\s*->\s*(\d+)/);
+    const t = c.trafico < 0 ? 0 : f[c.trafico];
     return {
-      proyecto: String(f[1]).trim(),
-      idioma: String(f[8]).trim(),
-      paises: String(f[9]).split(',').map(function (p) { return p.trim(); }).filter(String),
+      proyecto: String(f[c.proyecto]).trim(),
+      idioma: String(f[c.idioma]).trim(),
+      paises: String(f[c.paises]).split(',').map(function (p) { return p.trim(); }).filter(String),
       tipo: m ? 'Intervalo métrica ' + m[1] : '',
       cantidad: m ? Number(m[2]) : 0,
-      trafico: typeof f[12] === 'number' ? f[12] : (Number(String(f[12]).replace(/\./g, '').replace(',', '.')) || 0)
+      trafico: typeof t === 'number' ? t : (Number(String(t).replace(/\./g, '').replace(',', '.')) || 0)
     };
   }).filter(function (r) { return r.proyecto; });
 }
