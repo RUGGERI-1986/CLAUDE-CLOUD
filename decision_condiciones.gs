@@ -217,26 +217,27 @@ function armarVista_(sh) {
 
   // Filtros
   sh.getRange('B5:B11').setValues([
-    ['Cliente'], ['Proyectos elegidos'], ['Agregar o quitar proyecto'], ['Intervalo de métrica'],
+    ['Cliente'], ['Proyectos elegidos'], ['Elegir proyectos'], ['Intervalo de métrica'],
     ['País objetivo'], ['Cantidad mínima'], ['Tráfico mínimo exigido (desde)']
   ]).setFontWeight('bold');
   sh.getRange('C5').setValue(T);
   sh.getRange('C6:G6').merge();
   sh.getRange('C6').setValue(TP);
-  sh.getRange('C7').setValue('');
+  sh.getRange('C7:G7').merge();
+  sh.getRange('C7').setValue('▶  Menú Decisión → Elegir proyectos…  (se abre una lista con casillas, buscador y un clic por cliente)');
   sh.getRange('C8').setValue(T);
   sh.getRange('C9').setValue(T);
   sh.getRange('C10').setValue(1);
   sh.getRange('C11').setValue(0);
-  [['C5'], ['C7'], ['C8'], ['C9'], ['C10'], ['C11']].forEach(function (a) {
+  [['C5'], ['C8'], ['C9'], ['C10'], ['C11']].forEach(function (a) {
     sh.getRange(a[0]).setBackground(AZUL).setFontSize(11).setFontWeight('bold').setHorizontalAlignment('left')
       .setBorder(true, true, true, true, false, false, BORDE, SpreadsheetApp.BorderStyle.SOLID);
   });
+  sh.getRange('C7:G7').setBackground(NAVY).setFontColor('#FFFFFF').setFontSize(10).setFontWeight('bold').setHorizontalAlignment('left');
   sh.getRange('C6:G6').setBackground(AZUL_SUAVE).setFontSize(11).setFontWeight('bold').setWrap(true)
     .setBorder(true, true, true, true, false, false, BORDE, SpreadsheetApp.BorderStyle.SOLID);
 
-  const pistas = [['D5', 'Los proyectos para sumar son sólo los de este cliente'],
-    ['D7', 'Elegí uno para sumarlo; volvé a elegirlo para quitarlo'],
+  const pistas = [['D5', 'Muestra todos los proyectos de este cliente'],
     ['D8', 'DR del medio: 0-20, 21-40, ...'],
     ['D9', 'Coincide si el país está en la lista del proyecto'],
     ['D10', '1 oculta los intervalos sin cantidad pendiente'],
@@ -299,7 +300,6 @@ function armarVista_(sh) {
   sh.getRange('C9').setDataValidation(regla(datos.getRange('K2:K')));
   sh.getRange('C10:C11').setDataValidation(
     SpreadsheetApp.newDataValidation().requireNumberGreaterThanOrEqualTo(0).setAllowInvalid(false).build());
-  actualizarListaProyectos_(sh);
 
   sh.setTabColor('#2E6FDE');
 }
@@ -310,85 +310,123 @@ function armarVista_(sh) {
 
 function crearMenuDecision() {
   SpreadsheetApp.getUi().createMenu('Decisión')
+    .addItem('Elegir proyectos…', 'abrirSelectorProyectos')
     .addItem('Enviar fila a FILTRO', 'enviarAFiltro')
     .addItem('Limpiar filtros', 'limpiarFiltros')
     .addToUi();
 }
 
 /**
- * Hoja Decisión:
- *  - C5 (Cliente): limpia los proyectos elegidos y deja para sumar sólo los de ese cliente.
- *  - C7 (Agregar o quitar proyecto): suma el elegido a C6, o lo quita si ya estaba.
+ * Hoja Decisión: al cambiar Cliente (C5) se limpia la selección de proyectos (C6).
  * Las ediciones en FILTRO las atiende onEdit() de Autorrelleno.gs, que llama a cascadaFiltro_.
  */
 function alEditarDecision(e) {
   if (!e || !e.range) return;
   const sh = e.range.getSheet();
   if (sh.getName() !== CONFIG_DECISION.HOJA_VISTA) return;
-  if (e.range.getColumn() !== 3 || e.range.getNumRows() !== 1) return;
-  const fila = e.range.getRow();
-  if (fila === 5) {
+  if (e.range.getColumn() === 3 && e.range.getRow() === 5) {
     sh.getRange('C6').setValue(CONFIG_DECISION.TODOS_PROYECTOS);
-    sh.getRange('C7').setValue('');
-    actualizarListaProyectos_(sh);
-  } else if (fila === 7) {
-    alternarProyecto_(sh);
   }
-}
-
-function alternarProyecto_(sh) {
-  const TP = CONFIG_DECISION.TODOS_PROYECTOS;
-  const picker = sh.getRange('C7');
-  const elegido = String(picker.getValue()).trim();
-  if (!elegido) return;
-  const celda = sh.getRange('C6');
-  let lista = String(celda.getValue()).split(',').map(function (p) { return p.trim(); })
-    .filter(function (p) { return p && p !== TP; });
-  let aviso;
-  if (elegido === TP) {
-    lista = [];
-    aviso = 'Selección limpiada: se muestran todos los proyectos.';
-  } else if (lista.indexOf(elegido) !== -1) {
-    lista = lista.filter(function (p) { return p !== elegido; });
-    aviso = 'Quitado ' + elegido + ' (' + lista.length + ' elegidos).';
-  } else {
-    lista.push(elegido);
-    aviso = 'Agregado ' + elegido + ' (' + lista.length + ' elegidos).';
-  }
-  lista.sort();
-  celda.setValue(lista.length ? lista.join(', ') : TP);
-  picker.setValue('');
-  sh.getParent().toast(aviso, 'Decisión', 4);
-}
-
-/** Deja en C7 sólo los proyectos del cliente elegido en C5 (todos si es "Todos"). */
-function actualizarListaProyectos_(vista) {
-  SpreadsheetApp.flush();   // las fórmulas de Decisión_Datos tienen que estar calculadas antes de leerlas
-  const datos = vista.getParent().getSheetByName(CONFIG_DECISION.HOJA_DATOS);
-  const cliente = vista.getRange('C5').getValue();
-  const filas = datos.getRange(2, 1, datos.getLastRow() - 1, 2).getValues();
-  const proyectos = [];
-  filas.forEach(function (f) {
-    if (f[1] && String(f[1]).charAt(0) !== '#' && (cliente === CONFIG_DECISION.TODOS || f[0] === cliente) && proyectos.indexOf(f[1]) === -1) {
-      proyectos.push(f[1]);
-    }
-  });
-  proyectos.sort();
-  vista.getRange('C7').setDataValidation(SpreadsheetApp.newDataValidation()
-    .requireValueInList([CONFIG_DECISION.TODOS_PROYECTOS].concat(proyectos), true).setAllowInvalid(false).build());
 }
 
 function limpiarFiltros() {
   const vista = SpreadsheetApp.getActive().getSheetByName(CONFIG_DECISION.HOJA_VISTA);
   vista.getRange('C5').setValue(CONFIG_DECISION.TODOS);
   vista.getRange('C6').setValue(CONFIG_DECISION.TODOS_PROYECTOS);
-  vista.getRange('C7').setValue('');
   vista.getRange('C8').setValue(CONFIG_DECISION.TODOS);
   vista.getRange('C9').setValue(CONFIG_DECISION.TODOS);
   vista.getRange('C10').setValue(1);
   vista.getRange('C11').setValue(0);
-  actualizarListaProyectos_(vista);
 }
+
+/* ------------------------------------------------------------------ */
+/* SELECTOR DE PROYECTOS (panel lateral con casillas)                  */
+/* ------------------------------------------------------------------ */
+
+function abrirSelectorProyectos() {
+  SpreadsheetApp.getUi().showSidebar(
+    HtmlService.createHtmlOutput(SELECTOR_PROYECTOS_HTML_).setTitle('Elegir proyectos'));
+}
+
+/** Datos para el panel: proyectos con su cliente y los links pendientes, más la selección actual. */
+function datosSelectorProyectos() {
+  SpreadsheetApp.flush();
+  const ss = SpreadsheetApp.getActive();
+  const datos = ss.getSheetByName(CONFIG_DECISION.HOJA_DATOS);
+  const vista = ss.getSheetByName(CONFIG_DECISION.HOJA_VISTA);
+  const mapa = {};
+  datos.getRange(2, 1, Math.max(datos.getLastRow() - 1, 1), 4).getValues().forEach(function (f) {
+    const p = String(f[1]).trim();
+    if (!p || p.charAt(0) === '#') return;
+    if (!mapa[p]) mapa[p] = { cliente: String(f[0]).trim(), proyecto: p, pendiente: 0 };
+    mapa[p].pendiente += Number(f[3]) || 0;
+  });
+  const seleccion = String(vista.getRange('C6').getValue()).split(',')
+    .map(function (p) { return p.trim(); })
+    .filter(function (p) { return p && p !== CONFIG_DECISION.TODOS_PROYECTOS; });
+  return {
+    proyectos: Object.keys(mapa).sort().map(function (p) { return mapa[p]; }),
+    seleccion: seleccion
+  };
+}
+
+/** Lo llama el panel cada vez que se marca o desmarca algo. Lista vacía = todos los proyectos. */
+function guardarSeleccionDecision(lista) {
+  const vista = SpreadsheetApp.getActive().getSheetByName(CONFIG_DECISION.HOJA_VISTA);
+  const limpia = (lista || []).map(function (p) { return String(p).trim(); }).filter(String).sort();
+  vista.getRange('C6').setValue(limpia.length ? limpia.join(', ') : CONFIG_DECISION.TODOS_PROYECTOS);
+  // La selección manda sobre el filtro de cliente: si no, podrían quedar resultados vacíos.
+  if (limpia.length && vista.getRange('C5').getValue() !== CONFIG_DECISION.TODOS) {
+    vista.getRange('C5').setValue(CONFIG_DECISION.TODOS);
+  }
+  return limpia.length;
+}
+
+const SELECTOR_PROYECTOS_HTML_ = '<!DOCTYPE html><html><head><base target="_top"><style>' +
+  'body{font-family:Arial,sans-serif;font-size:13px;margin:0;color:#1F2A3C}' +
+  '.top{position:sticky;top:0;background:#fff;padding:10px 12px;border-bottom:1px solid #DDE3EC;z-index:2}' +
+  '#q{width:100%;box-sizing:border-box;padding:7px 9px;border:1px solid #B6C8EA;border-radius:6px;font-size:13px}' +
+  '.acc{display:flex;gap:6px;margin-top:8px}' +
+  '.acc button{flex:1;padding:6px 4px;border:1px solid #B6C8EA;background:#DBE7FB;border-radius:6px;cursor:pointer;font-size:12px;color:#1F2A3C}' +
+  '.acc button:hover{background:#C9DCFA}' +
+  '#resumen{margin-top:8px;font-weight:bold;font-size:12px}' +
+  '.cli{background:#F8F6F4;padding:6px 12px;font-weight:bold;border-top:1px solid #EEE}' +
+  '.pro{padding:5px 12px 5px 30px}.pro:hover{background:#EEF3FC}' +
+  'label{cursor:pointer;display:flex;align-items:center;gap:8px;width:100%}' +
+  '.n{margin-left:auto;color:#6B7280;font-size:11px;font-weight:normal}' +
+  '#estado{color:#6B7280;font-size:11px;padding:8px 12px}' +
+  '</style></head><body>' +
+  '<div class="top"><input id="q" placeholder="Buscar proyecto o cliente…" oninput="render()">' +
+  '<div class="acc"><button onclick="marcarVisibles(true)">Marcar visibles</button>' +
+  '<button onclick="marcarVisibles(false)">Quitar visibles</button>' +
+  '<button onclick="verTodos()">Ver todos</button></div><div id="resumen"></div></div>' +
+  '<div id="lista">Cargando…</div><div id="estado"></div>' +
+  '<script>' +
+  'var data=[],sel={},timer=null;' +
+  'google.script.run.withSuccessHandler(init).withFailureHandler(fallo).datosSelectorProyectos();' +
+  'function init(d){data=d.proyectos;sel={};d.seleccion.forEach(function(p){sel[p]=true;});render();}' +
+  'function fallo(e){document.getElementById("lista").textContent="Error: "+e.message;}' +
+  'function esc(s){return String(s).replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;");}' +
+  'function visibles(){var q=document.getElementById("q").value.toLowerCase().trim();' +
+  'return data.filter(function(x){return !q||x.proyecto.toLowerCase().indexOf(q)>=0||x.cliente.toLowerCase().indexOf(q)>=0;});}' +
+  'function render(){var y=window.scrollY,v=visibles(),h="",por={};' +
+  'v.forEach(function(x){(por[x.cliente]=por[x.cliente]||[]).push(x);});' +
+  'Object.keys(por).sort().forEach(function(c){var ps=por[c];' +
+  'var n=ps.filter(function(x){return sel[x.proyecto];}).length;' +
+  'h+="<div class=\\"cli\\"><label><input type=\\"checkbox\\" data-cli=\\""+esc(c)+"\\" data-n=\\""+n+"\\" data-t=\\""+ps.length+"\\" "+(n===ps.length?"checked":"")+" onchange=\\"clickCli(this)\\"> "+esc(c)+"<span class=\\"n\\">"+ps.length+"</span></label></div>";' +
+  'ps.forEach(function(x){h+="<div class=\\"pro\\"><label><input type=\\"checkbox\\" data-pro=\\""+esc(x.proyecto)+"\\" "+(sel[x.proyecto]?"checked":"")+" onchange=\\"clickPro(this)\\"> "+esc(x.proyecto)+"<span class=\\"n\\">"+x.pendiente+" links</span></label></div>";});});' +
+  'document.getElementById("lista").innerHTML=h||"<div id=\\"estado\\">Sin coincidencias.</div>";' +
+  'document.querySelectorAll("input[data-cli]").forEach(function(cb){var n=+cb.getAttribute("data-n"),t=+cb.getAttribute("data-t");cb.indeterminate=n>0&&n<t;});' +
+  'window.scrollTo(0,y);resumen();}' +
+  'function resumen(){var n=Object.keys(sel).length;document.getElementById("resumen").textContent=n?n+" proyecto(s) elegido(s)":"Sin selección: se muestran todos los proyectos";}' +
+  'function clickPro(cb){var p=cb.getAttribute("data-pro");if(cb.checked)sel[p]=true;else delete sel[p];render();guardar();}' +
+  'function clickCli(cb){var c=cb.getAttribute("data-cli");visibles().filter(function(x){return x.cliente===c;}).forEach(function(x){if(cb.checked)sel[x.proyecto]=true;else delete sel[x.proyecto];});render();guardar();}' +
+  'function marcarVisibles(on){visibles().forEach(function(x){if(on)sel[x.proyecto]=true;else delete sel[x.proyecto];});render();guardar();}' +
+  'function verTodos(){sel={};render();guardar();}' +
+  'function guardar(){clearTimeout(timer);document.getElementById("estado").textContent="Aplicando…";' +
+  'timer=setTimeout(function(){google.script.run.withSuccessHandler(function(){document.getElementById("estado").textContent="Aplicado en la hoja ✓";})' +
+  '.withFailureHandler(fallo).guardarSeleccionDecision(Object.keys(sel));},350);}' +
+  '</script></body></html>';
 
 /* ------------------------------------------------------------------ */
 /* FILTRO EN CASCADA: cada desplegable depende de los de arriba        */
