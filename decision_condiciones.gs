@@ -104,7 +104,7 @@ function escribirFormula_(celda, formula) {
       throw new Error('La fórmula de ' + celda.getA1Notation() + ' da #ERROR! con "," y con ";": ' + formula);
     }
     SEPARADOR_DECISION.puntoYComa = true;
-    celda.getParent().toast('La planilla usa ";" en las fórmulas: las escribo así.', 'Decisión', 5);
+    SpreadsheetApp.getActive().toast('La planilla usa ";" en las fórmulas: las escribo así.', 'Decisión', 5);
     return;
   }
   celda.setFormula(formulaConPuntoYComa_(formula));
