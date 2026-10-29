@@ -224,7 +224,8 @@ function armarVista_(sh) {
   sh.getRange('C6:G6').merge();
   sh.getRange('C6').setValue(TP);
   sh.getRange('C7:G7').merge();
-  sh.getRange('C7').setValue('▶  Menú Decisión → Elegir proyectos…  (se abre una lista con casillas, buscador y un clic por cliente)');
+  sh.getRange('C7').setValue('▶  ELEGIR PROYECTOS   (hacé clic acá)')
+    .setNote('Hacé clic en esta celda para abrir la lista de proyectos con casillas y buscador.');
   sh.getRange('C8').setValue(T);
   sh.getRange('C9').setValue(T);
   sh.getRange('C10').setValue(1);
@@ -233,7 +234,8 @@ function armarVista_(sh) {
     sh.getRange(a[0]).setBackground(AZUL).setFontSize(11).setFontWeight('bold').setHorizontalAlignment('left')
       .setBorder(true, true, true, true, false, false, BORDE, SpreadsheetApp.BorderStyle.SOLID);
   });
-  sh.getRange('C7:G7').setBackground(NAVY).setFontColor('#FFFFFF').setFontSize(10).setFontWeight('bold').setHorizontalAlignment('left');
+  sh.getRange('C7:G7').setBackground('#2E6FDE').setFontColor('#FFFFFF').setFontSize(11).setFontWeight('bold').setHorizontalAlignment('center')
+    .setBorder(true, true, true, true, false, false, NAVY, SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
   sh.getRange('C6:G6').setBackground(AZUL_SUAVE).setFontSize(11).setFontWeight('bold').setWrap(true)
     .setBorder(true, true, true, true, false, false, BORDE, SpreadsheetApp.BorderStyle.SOLID);
 
@@ -326,6 +328,22 @@ function alEditarDecision(e) {
   if (sh.getName() !== CONFIG_DECISION.HOJA_VISTA) return;
   if (e.range.getColumn() === 3 && e.range.getRow() === 5) {
     sh.getRange('C6').setValue(CONFIG_DECISION.TODOS_PROYECTOS);
+  }
+}
+
+/**
+ * La celda C7 de "Decisión" funciona como botón: al seleccionarla se abre el panel de proyectos.
+ * Es un activador simple (no hay que instalar nada). Si por algún motivo no abre, usar el menú
+ * Decisión → Elegir proyectos…
+ */
+function onSelectionChange(e) {
+  try {
+    const r = e && e.range;
+    if (!r || r.getSheet().getName() !== CONFIG_DECISION.HOJA_VISTA) return;
+    if (r.getRow() !== 7 || r.getColumn() !== 3 || r.getNumRows() !== 1) return;
+    abrirSelectorProyectos();
+  } catch (err) {
+    console.error(new Date(), 'onSelectionChange', err);
   }
 }
 
