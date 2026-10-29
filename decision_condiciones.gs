@@ -14,6 +14,7 @@ const CONFIG_DECISION = {
   HOJA_FILTRO: 'FILTRO',
   HOJA_AUXILIAR: 'Auxiliar',
   HOJA_PARAMETROS: 'Parámetros',
+  HOJA_BASE: 'BASE',
   FILA_ENCABEZADO: 12,
   FILA_RESULTADOS: 13,
   MAX_LINKS: 50,
@@ -184,9 +185,104 @@ function crearMenuDecision() {
 function alEditarDecision(e) {
   if (!e || !e.range) return;
   const sh = e.range.getSheet();
+  if (sh.getName() === CONFIG_DECISION.HOJA_FILTRO) {
+    const f = e.range.getRow();
+    // C5 Proyecto, C7 Tipo, C8 País alteran los desplegables de abajo. C6 (mes) no depende de nada.
+    if (e.range.getColumn() === 3 && (f === 5 || f === 7 || f === 8)) cascadaFiltro_(sh, f === 5 ? 7 : f + 1);
+    return;
+  }
   if (sh.getName() !== CONFIG_DECISION.HOJA_VISTA) return;
   if (e.range.getRow() !== 4 || e.range.getColumn() !== 3) return;
   actualizarListaProyectos_(sh);
+}
+
+/* ------------------------------------------------------------------ */
+/* FILTRO EN CASCADA: cada desplegable depende de los de arriba        */
+/* ------------------------------------------------------------------ */
+
+/** Ejecutar una vez a mano para aplicar la cascada con lo que hoy hay en FILTRO. */
+function activarCascadaFiltro() {
+  cascadaFiltro_(SpreadsheetApp.getActive().getSheetByName(CONFIG_DECISION.HOJA_FILTRO), 7);
+}
+
+/**
+ * Recalcula los desplegables de FILTRO desde la fila `desde` (7, 8 o 9) hacia abajo.
+ * C7 Tipo de servicio: intervalos que el proyecto tiene en Condiciones (y que Auxiliar admite).
+ * C8 País: países objetivo del proyecto en ESE intervalo.
+ * C9 Idioma: idioma del cliente + idiomas con negociación en BASE para ESE país.
+ * Si el valor actual ya no está entre las opciones, pasa a la primera opción.
+ */
+function cascadaFiltro_(filtro, desde) {
+  const ss = filtro.getParent();
+  const aux = ss.getSheetByName(CONFIG_DECISION.HOJA_AUXILIAR);
+  const filas = leerCondicionesFiltro_(ss);
+  const proyecto = String(filtro.getRange('C5').getValue()).trim();
+  const delProyecto = filas.filter(function (r) { return r.proyecto === proyecto; });
+  if (!delProyecto.length) {
+    ss.toast('"' + proyecto + '" no está en Condiciones: los desplegables quedan sin filtrar.', 'FILTRO', 6);
+    aplicarOpciones_(filtro.getRange('C7'), [], aux.getRange('B2:B5'));
+    aplicarOpciones_(filtro.getRange('C8'), [], aux.getRange('C2:C300'));
+    aplicarOpciones_(filtro.getRange('C9'), [], aux.getRange('D2:D300'));
+    return;
+  }
+
+  if (desde <= 7) {
+    const validos = aux.getRange('B2:B5').getValues().flat().filter(String);
+    const porTipo = {};
+    delProyecto.forEach(function (r) {
+      if (r.tipo && validos.indexOf(r.tipo) !== -1) porTipo[r.tipo] = (porTipo[r.tipo] || 0) + r.cantidad;
+    });
+    const tipos = Object.keys(porTipo).sort(function (a, b) { return porTipo[b] - porTipo[a] || (a < b ? -1 : 1); });
+    aplicarOpciones_(filtro.getRange('C7'), tipos, aux.getRange('B2:B5'));
+  }
+  if (desde <= 8) {
+    const tipo = filtro.getRange('C7').getValue();
+    const paises = [];
+    delProyecto.filter(function (r) { return r.tipo === tipo; }).forEach(function (r) {
+      r.paises.forEach(function (p) { if (paises.indexOf(p) === -1) paises.push(p); });
+    });
+    aplicarOpciones_(filtro.getRange('C8'), paises, aux.getRange('C2:C300'));
+  }
+  if (desde <= 9) {
+    const pais = filtro.getRange('C8').getValue();
+    const idiomas = [];
+    const cliente = delProyecto.map(function (r) { return r.idioma; }).filter(String)[0];
+    if (cliente) idiomas.push(cliente);
+    const base = ss.getSheetByName(CONFIG_DECISION.HOJA_BASE);
+    const n = base.getLastRow() - 1;
+    if (n > 0) {
+      base.getRange(2, 13, n, 6).getValues().forEach(function (b) { // M país, N idioma, ..., Q deal_type
+        if (b[0] === pais && b[1] && b[4] && idiomas.indexOf(b[1]) === -1) idiomas.push(b[1]);
+      });
+    }
+    aplicarOpciones_(filtro.getRange('C9'), idiomas, aux.getRange('D2:D300'));
+  }
+}
+
+function aplicarOpciones_(celda, opciones, rangoOriginal) {
+  const b = SpreadsheetApp.newDataValidation().setAllowInvalid(false);
+  if (!opciones.length) {
+    celda.setDataValidation(b.requireValueInRange(rangoOriginal, true).build());
+    return;
+  }
+  celda.setDataValidation(b.requireValueInList(opciones, true).build());
+  if (opciones.indexOf(celda.getValue()) === -1) celda.setValue(opciones[0]);
+}
+
+function leerCondicionesFiltro_(ss) {
+  const sh = ss.getSheetByName(CONFIG_DECISION.HOJA_CONDICIONES);
+  const n = sh.getLastRow() - 1;
+  if (n < 1) return [];
+  return sh.getRange(2, 1, n, 13).getValues().map(function (f) {
+    const m = String(f[11]).match(/(\d+-\d+)\s*->\s*(\d+)/);
+    return {
+      proyecto: String(f[1]).trim(),
+      idioma: String(f[8]).trim(),
+      paises: String(f[9]).split(',').map(function (p) { return p.trim(); }).filter(String),
+      tipo: m ? 'Intervalo métrica ' + m[1] : '',
+      cantidad: m ? Number(m[2]) : 0
+    };
+  }).filter(function (r) { return r.proyecto; });
 }
 
 function actualizarListaProyectos_(vista) {
@@ -288,6 +384,7 @@ function enviarAFiltro() {
   if (idioma) filtro.getRange('C9').setValue(idioma);
   filtro.getRange('C10').setValue(links);
   filtro.getRange('C11').setValue(trafico > 0 ? trafico : '');
+  cascadaFiltro_(filtro, 7);
   ss.setActiveSheet(filtro);
   ss.toast(proyecto + ' · ' + tipo + ' · ' + pais + ' · ' + links + ' links' +
     (cantidad > links ? ' (pedían ' + cantidad + ', FILTRO admite ' + CONFIG_DECISION.MAX_LINKS + ')' : ''),
